@@ -131,6 +131,112 @@ async function run() {
         res.status(500).json({ error: "Internal server error" });
       }
     });
+
+    // complete doctors profile
+    app.get("/api/complete-doctors", async (req, res) => {
+      try {
+        const doctorsWithDetails = await doctorCollection
+          .aggregate([
+            // ১. String userId-কে ObjectId-তে রূপান্তর করা (অবশ্যই প্রয়োজনীয়)
+            {
+              $addFields: {
+                convertedUserId: { $toObjectId: "$userId" },
+              },
+            },
+
+            // ২. 'users' কালেকশনের সাথে কানেক্ট করা
+            {
+              $lookup: {
+                from: "user",
+                localField: "convertedUserId", // রূপান্তরিত ফিল্ডটি এখানে ব্যবহার হবে
+                foreignField: "_id",
+                as: "userInfo",
+              },
+            },
+            // Array-কে Object-এ রূপান্তর করা
+            {
+              $unwind: { path: "$userInfo", preserveNullAndEmptyArrays: true },
+            },
+
+            // ৩. 'reviews' কালেকশনের সাথে কানেক্ট করা
+            {
+              $lookup: {
+                from: "reviews",
+                localField: "_id", // ডক্টরের ObjectId
+                foreignField: "doctorId", // রিভিউ কালেকশনে ডক্টরের আইডি যেভাবে আছে
+                as: "reviewsData",
+              },
+            },
+
+            // ৪. 'schedules' কালেকশনের সাথে কানেক্ট করা
+            {
+              $lookup: {
+                from: "schedules",
+                localField: "_id",
+                foreignField: "doctorId",
+                as: "scheduleInfo",
+              },
+            },
+            {
+              $unwind: {
+                path: "$scheduleInfo",
+                preserveNullAndEmptyArrays: true,
+              },
+            },
+
+            // ৫. আপনার কাঙ্ক্ষিত ফরম্যাটে ডাটা সাজানো
+            {
+              $project: {
+                _id: 0, // মেইন _id হাইড করতে চাইলে রাখতে পারেন
+                id: "$_id",
+                name: { $ifNull: ["$userInfo.name", ""] },
+                image: { $ifNull: ["$userInfo.image", ""] },
+                phone: { $ifNull: ["$userInfo.phone", ""] },
+                specialization: 1,
+                specializations: 1,
+                awards: 1,
+                qualifications: 1,
+                experience: 1,
+                consultationFee: 1,
+                hospitalName: 1,
+                bio: 1,
+                verificationStatus: 1,
+                userId: 1,
+                // রিভিউ ডাটা প্রসেসিং (যদি রিভিউ না থাকে তবে ডিফল্ট ভ্যালু বসবে)
+                rating: {
+                  $cond: {
+                    if: { $gt: [{ $size: "$reviewsData" }, 0] },
+                    then: { $round: [{ $avg: "$reviewsData.rating" }, 1] }, // ডেসিমাল ১ ঘর পর্যন্ত রাউন্ড করবে
+                    else: 0,
+                  },
+                },
+                reviewCount: { $size: "$reviewsData" },
+                reviews: "$reviewsData",
+                // সিডিউল ডাটা প্রসেসিং
+                availableToday: {
+                  $ifNull: ["$scheduleInfo.availableToday", false],
+                },
+                slots: {
+                  $ifNull: [
+                    "$scheduleInfo.slots",
+                    { morning: [], afternoon: [] },
+                  ],
+                },
+              },
+            },
+          ])
+          .toArray();
+
+        res.json(doctorsWithDetails);
+      } catch (error) {
+        console.error("Error fetching data:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    });
+
+
+
+
   } catch (err) {
     console.error("❌ Failed to connect to MongoDB:", err);
     process.exit(1);

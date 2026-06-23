@@ -47,10 +47,22 @@ async function run() {
     });
 
     // Get all user from the user collection by the role doctor
-    app.get("/api/users/doctors", async (req, res) => {
+    // app.get("/api/users/doctors", async (req, res) => {
+    //   try {
+    //     const usersDoctor = await usersCollection.find({ role: "doctor" }).toArray();
+    //     res.json(usersDoctor);
+    //   } catch (error) {
+    //     console.error("Error fetching users:", error);
+    //     res.status(500).json({ error: "Internal server error" });
+    //   }
+    // });
+
+
+    // Get all user from the user collection by the role
+    app.get("/api/users/:role", async (req, res) => {
       try {
-        const usersDoctor = await usersCollection.find({ role: "doctor" }).toArray();
-        res.json(usersDoctor);
+        const users = await usersCollection.find({ role: req.params.role }).toArray();
+        res.json(users);
       } catch (error) {
         console.error("Error fetching users:", error);
         res.status(500).json({ error: "Internal server error" });

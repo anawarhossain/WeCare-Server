@@ -28,11 +28,27 @@ async function run() {
 
     // const doctorCollection = client.db("WeCareDB").collection("doctors");
     const doctorCollection = database.collection("doctors");
+    const usersCollection = database.collection("user");
 
     // Root
     app.get("/", (req, res) => {
       res.json({ message: "WeCare API is running 🚀" });
     });
+
+    
+
+
+    // Get all doctors from the doctors collection
+    app.get("/api/doctors", async (req, res) => {
+      try {
+        const doctors = await doctorCollection.find().toArray();
+        res.json(doctors);
+      } catch (error) {
+        console.error("Error fetching doctors:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    });
+
 
     // Get a single doctor by userId
     app.get("/api/doctors/user/:userId", async (req, res) => {

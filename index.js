@@ -33,33 +33,57 @@ async function run() {
     app.get("/", (req, res) => {
       res.json({ message: "WeCare API is running 🚀" });
     });
-    
 
     // Get a single doctor by userId
-    app.get("/api/doctors/:userId", async (req, res) => {
-      const doctor = await doctorCollection.findOne({
-        userId: req.params.userId,
-      });
-      if (!doctor) return res.status(404).json({ message: "Doctor not found" });
-      res.json(doctor);
+    app.get("/api/doctors/user/:userId", async (req, res) => {
+      try {
+        const doctor = await doctorCollection.findOne({
+          userId: req.params.userId,
+        });
+
+        if (!doctor) {
+          return res.status(404).json({ message: "Doctor not found" });
+        }
+
+        res.json(doctor);
+      } catch (error) {
+        console.error("Error fetching doctor:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
     });
 
     // Create a new doctor profile
     app.post("/api/doctors", async (req, res) => {
-      const result = await doctorCollection.insertOne(req.body);
-      res.status(201).json(result);
+      try {
+        const result = await doctorCollection.insertOne(req.body);
+        res.status(201).json(result);
+      } catch (error) {
+        res.status(500).json({ error: "Failed to create doctor" });
+      }
     });
 
     // Update an existing doctor profile
     app.put("/api/doctors/:id", async (req, res) => {
-      const updatedData = { ...req.body };
-      delete updatedData._id; // MongoDB does not allow updating the _id field
+      try {
+        // ১. req.body থেকে _id এবং অন্যান্য সেনসিটিভ ফিল্ড আলাদা করে ফেলুন
+        // বাকি সব ডেটা 'allowedData' এর মধ্যে চলে যাবে
+        const { _id, createdAt, userId, ...allowedData } = req.body;
 
-      const result = await doctorCollection.updateOne(
-        { _id: new ObjectId(req.params.id) },
-        { $set: updatedData },
-      );
-      res.json(result);
+        // ২. মঙ্গোডিবিতে আপডেট রান করুন
+        const result = await doctorCollection.updateOne(
+          { _id: new ObjectId(req.params.id) }, // এই আইডি-র ডাটাটাই আপডেট হবে (ডিলিট হবে না)
+          { $set: allowedData }, // শুধু এই ডাটাগুলো পরিবর্তন হবে
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).json({ error: "Doctor not found" });
+        }
+
+        res.json({ message: "Profile updated successfully", result });
+      } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "Internal server error" });
+      }
     });
   } catch (err) {
     console.error("❌ Failed to connect to MongoDB:", err);

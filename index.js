@@ -35,8 +35,16 @@ async function run() {
       res.json({ message: "WeCare API is running 🚀" });
     });
 
-    
-
+    // Get all users from the user collection
+    app.get("/api/users", async (req, res) => {
+      try {
+        const users = await usersCollection.find().toArray();
+        res.json(users);
+      } catch (error) {
+        console.error("Error fetching users:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    });
 
     // Get all doctors from the doctors collection
     app.get("/api/doctors", async (req, res) => {
@@ -48,7 +56,6 @@ async function run() {
         res.status(500).json({ error: "Internal server error" });
       }
     });
-
 
     // Get a single doctor by userId
     app.get("/api/doctors/user/:userId", async (req, res) => {

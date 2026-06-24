@@ -348,7 +348,7 @@ async function run() {
                 slots: {
                   $ifNull: [
                     "$scheduleInfo.slots",
-                    { morning: [], afternoon: [] },
+                    { Monday: [], Tuesday: [], Wednesday: [], Thursday: [], Friday: [], Saturday: [], Sunday: [] },
                   ],
                 },
               },

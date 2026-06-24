@@ -29,6 +29,8 @@ async function run() {
     // const doctorCollection = client.db("WeCareDB").collection("doctors");
     const doctorCollection = database.collection("doctors");
     const usersCollection = database.collection("user");
+    const reviewsCollection = database.collection("reviews");
+    const schedulesCollection = database.collection("schedules");
 
     // Root
     app.get("/", (req, res) => {
@@ -53,7 +55,6 @@ async function run() {
     // Get all users from the user collection End
     //***********************************************************************************
 
-
     //***********************************************************************************
     // Get all user from the user collection by the role Start
     app.get("/api/users/:role", async (req, res) => {
@@ -69,7 +70,6 @@ async function run() {
     });
     // Get all user from the user collection by the role End
     //***********************************************************************************
-    
 
     //***********************************************************************************
     // Get all doctors from the doctors collection Start
@@ -369,6 +369,117 @@ async function run() {
       }
     });
     // নির্দিষ্ট ডাক্তারের ID দিয়ে ডাটা খোঁজার API End
+    //***********************************************************************************
+
+    //***********************************************************************************
+    // নির্দিষ্ট ডক্টরের সিডিউল এবং পরিসংখ্যান (Stats) নিয়ে আসার API Start
+    app.get("/api/schedules/:doctorId", async (req, res) => {
+      try {
+        const { doctorId } = req.params;
+
+        // ডাটাবেজ থেকে ডক্টরের সিডিউল খোঁজা
+        const schedule = await schedulesCollection.findOne({
+          doctorId: doctorId,
+        });
+
+        // ডিফল্ট স্ট্রাকচার (যদি ডাটাবেজে আগে থেকে কোনো সিডিউল না থাকে)
+        const defaultSlots = {
+          Monday: [],
+          Tuesday: [],
+          Wednesday: [],
+          Thursday: [],
+          Friday: [],
+          Saturday: [],
+          Sunday: [],
+        };
+
+        const slots = schedule ? schedule.slots : defaultSlots;
+
+        // ডাইনামিক পরিসংখ্যান (Stats) গণনা করা
+        let weeklySlotsCount = 0;
+        Object.values(slots).forEach((daySlots) => {
+          if (Array.isArray(daySlots)) weeklySlotsCount += daySlots.length;
+        });
+
+        const stats = [
+          {
+            label: "Weekly Slots",
+            value: String(weeklySlotsCount),
+            iconBg: "var(--color-success-bg)",
+            iconColor: "var(--color-success)",
+          },
+          {
+            label: "Avg. Duration",
+            value: schedule?.avgDuration
+              ? `${schedule.avgDuration} min`
+              : "30 min",
+            iconBg: "var(--primary-100)",
+            iconColor: "var(--color-primary)",
+          },
+          {
+            label: "Booked Today",
+            value: "0 / 0", // এটি অ্যাপয়েন্টমেন্ট কালেকশন থেকে ডাইনামিক করা যাবে পরে
+            iconBg: "var(--accent-100)",
+            iconColor: "var(--accent-600)",
+          },
+          {
+            label: "Status",
+            value: weeklySlotsCount > 0 ? "Active" : "Inactive",
+            iconBg:
+              weeklySlotsCount > 0
+                ? "var(--color-success-bg)"
+                : "var(--neutral-200)",
+            iconColor:
+              weeklySlotsCount > 0
+                ? "var(--color-success)"
+                : "var(--text-muted)",
+            fill: weeklySlotsCount > 0,
+            valueColor:
+              weeklySlotsCount > 0
+                ? "var(--color-success)"
+                : "var(--text-muted)",
+          },
+        ];
+
+        res.json({ slots, stats });
+      } catch (error) {
+        console.error("Error fetching schedule:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    });
+    // নির্দিষ্ট ডক্টরের সিডিউল এবং পরিসংখ্যান (Stats) নিয়ে আসার API End
+    //***********************************************************************************
+
+    //***********************************************************************************
+    // সিডিউল সেভ বা আপডেট করার API (Upsert) Start
+    app.post("/api/schedules/save", async (req, res) => {
+      try {
+        const { doctorId, slots, avgDuration } = req.body;
+
+        if (!doctorId) {
+          return res.status(400).json({ error: "Doctor ID is required" });
+        }
+
+        // ডাটাবেজে আপডেট করা (না থাকলে নতুন তৈরি হবে - upsert)
+        const result = await schedulesCollection.updateOne(
+          { doctorId: doctorId },
+          {
+            $set: {
+              slots: slots,
+              avgDuration: avgDuration || 30,
+              updatedAt: new Date(),
+            },
+          },
+          { upsert: true },
+        );
+
+        res.json({ success: true, message: "Schedule updated successfully!" });
+      } catch (error) {
+        console.error("Error saving schedule:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    });
+    // সিডিউল সেভ বা আপডেট করার API (Upsert) End
     //***********************************************************************************
 
     //***********************************************************************************

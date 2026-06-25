@@ -32,6 +32,7 @@ async function run() {
     const reviewsCollection = database.collection("reviews");
     const schedulesCollection = database.collection("schedules");
     const paymentsCollection = database.collection("payments");
+    const prescriptionsCollection = database.collection("prescriptions");
 
     // Root
     app.get("/", (req, res) => {
@@ -497,15 +498,93 @@ async function run() {
     app.post("/api/payments/save", async (req, res) => {
       try {
         const paymentData = req.body;
-        const result = await paymentsCollection.insertOne(paymentData);
-        res.json({ success: true, message: "Payment data saved successfully!" });
+
+        const isExistingPayment = await paymentsCollection.findOne({
+          stripeSessionId: paymentData.stripeSessionId,
+        });
+
+        if (isExistingPayment) {
+          return res.json({
+            success: false,
+            message: "Already saved",
+          });
+        }
+
+        await paymentsCollection.insertOne(paymentData);
+
+        res.json({
+          success: true,
+          message: "Payment data saved successfully!",
+        });
       } catch (error) {
         console.error("Error saving payment data:", error);
         res.status(500).json({ error: "Internal server error" });
       }
+    });
+    // Payment data save API End
+    //***********************************************************************************
+
+    //***********************************************************************************
+    // Create Prescription API Start
+    app.post("/api/prescriptions/save", async (req, res) => {
+      try {
+        const prescriptionData = req.body;
+
+        await prescriptionsCollection.insertOne(prescriptionData);
+
+        res.json({
+          success: true,
+          message: "Prescription saved successfully!",
+        });
+      } catch (error) {
+        console.error("Error saving prescription:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
     })
     //***********************************************************************************
-    
+
+    //***********************************************************************************
+    // Get patients appointments by doctorId API Start
+    app.get("/api/appointments/:doctorId", async (req, res) => {
+      try {
+        const doctorId = req.params.doctorId;
+
+        const payments = await paymentsCollection
+          .find({ doctorId: doctorId })
+          .toArray();
+
+        res.json(payments);
+      } catch (error) {
+        console.error("Error fetching payments:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    });
+    // Get patients by doctorId API End
+    //***********************************************************************************
+
+    //***********************************************************************************
+    // treadmendStatus update by id API Start
+    app.put("/api/appointments/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const { treadmendStatus } = req.body;
+
+        const result = await paymentsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { treadmendStatus: treadmendStatus } },
+        );
+
+        res.json({
+          success: true,
+          message: "Treatment status updated successfully!",
+        });
+      } catch (error) {
+        console.error("Error updating treatment status:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    });
+    // treadmendStatus update by id API End
+    //***********************************************************************************
 
     //***********************************************************************************
     //***********************************************************************************

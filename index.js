@@ -269,10 +269,11 @@ async function run() {
               $match: { _id: new ObjectId(doctorId) },
             },
 
-            // ২. String userId-কে ObjectId-তে রূপান্তর করা
+            // ২. ডাটা টাইপ কনভার্সন (userId কে ObjectId এবং ডক্টরের নিজস্ব _id কে String করা)
             {
               $addFields: {
                 convertedUserId: { $toObjectId: "$userId" },
+                doctorIdString: { $toString: "$_id" }, // 👈 এখানে ডক্টরের ObjectId কে String বানিয়ে নেওয়া হলো
               },
             },
 
@@ -303,8 +304,8 @@ async function run() {
             {
               $lookup: {
                 from: "schedules",
-                localField: "_id",
-                foreignField: "doctorId",
+                localField: "doctorIdString", // 👈 আমাদের তৈরি করা ডক্টরের String ID ফিল্ড
+                foreignField: "doctorId", // 👈 schedules কালেকশনে থাকা String doctorId
                 as: "scheduleInfo",
               },
             },
@@ -348,7 +349,15 @@ async function run() {
                 slots: {
                   $ifNull: [
                     "$scheduleInfo.slots",
-                    { Monday: [], Tuesday: [], Wednesday: [], Thursday: [], Friday: [], Saturday: [], Sunday: [] },
+                    {
+                      Monday: [],
+                      Tuesday: [],
+                      Wednesday: [],
+                      Thursday: [],
+                      Friday: [],
+                      Saturday: [],
+                      Sunday: [],
+                    },
                   ],
                 },
               },

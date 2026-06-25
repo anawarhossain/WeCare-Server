@@ -31,6 +31,7 @@ async function run() {
     const usersCollection = database.collection("user");
     const reviewsCollection = database.collection("reviews");
     const schedulesCollection = database.collection("schedules");
+    const paymentsCollection = database.collection("payments");
 
     // Root
     app.get("/", (req, res) => {
@@ -490,6 +491,21 @@ async function run() {
     });
     // সিডিউল সেভ বা আপডেট করার API (Upsert) End
     //***********************************************************************************
+
+    //***********************************************************************************
+    // Payment data save API Start
+    app.post("/api/payments/save", async (req, res) => {
+      try {
+        const paymentData = req.body;
+        const result = await paymentsCollection.insertOne(paymentData);
+        res.json({ success: true, message: "Payment data saved successfully!" });
+      } catch (error) {
+        console.error("Error saving payment data:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    })
+    //***********************************************************************************
+    
 
     //***********************************************************************************
     //***********************************************************************************

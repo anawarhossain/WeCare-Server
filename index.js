@@ -528,8 +528,9 @@ async function run() {
     // Create Prescription API Start
     app.post("/api/prescriptions/save", async (req, res) => {
       try {
-        const prescriptionData = req.body;
+        const prescriptionData = {...req.body, createdAt: new Date()};
 
+        
         await prescriptionsCollection.insertOne(prescriptionData);
 
         res.json({
@@ -540,7 +541,7 @@ async function run() {
         console.error("Error saving prescription:", error);
         res.status(500).json({ error: "Internal server error" });
       }
-    })
+    });
     //***********************************************************************************
 
     //***********************************************************************************
@@ -584,6 +585,60 @@ async function run() {
       }
     });
     // treadmendStatus update by id API End
+    //***********************************************************************************
+
+    //***********************************************************************************
+    // Get all prescriptions by doctorId API Start
+    app.get("/api/prescriptions/:doctorId", async (req, res) => {
+      try {
+        const doctorId = req.params.doctorId;
+
+        const prescriptions = await prescriptionsCollection
+          .find({ doctorId: doctorId })
+          .sort({ createdAt: -1 }) // নতুনগুলো আগে দেখাবে
+          .toArray();
+
+        res.json(prescriptions);
+      } catch (error) {
+        console.error("Error fetching prescriptions:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    });
+    // Get all prescriptions by doctorId API End
+    //***********************************************************************************
+
+    //***********************************************************************************
+    // Edit/Update prescription by id API Start
+    app.put("/api/prescriptions/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const { medicines, instructions } = req.body;
+
+        const result = await prescriptionsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          {
+            $set: {
+              medicines: medicines,
+              instructions: instructions,
+              updatedAt: new Date(),
+            },
+          },
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).json({ error: "Prescription not found" });
+        }
+
+        res.json({
+          success: true,
+          message: "Prescription updated successfully!",
+        });
+      } catch (error) {
+        console.error("Error updating prescription:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    });
+    // Edit/Update prescription by id API End
     //***********************************************************************************
 
     //***********************************************************************************

@@ -696,6 +696,124 @@ async function run() {
     //***********************************************************************************
     //***********************************************************************************
     //***********************************************************************************
+    //***********************************************************************************
+    // ⬇️ আপনার existing express ফাইলে যুক্ত করুন
+    // paymentsCollection = appointment/booking ডেটা (আপনি যেটাকে patientsCollection বলছেন)
+    // reviewsCollection  = review ডেটা
+
+    // "09:00 PM - 09:30 PM" থেকে শুরুর সময়টাকে মিনিটে বদলানোর হেল্পার
+    // (string হিসেবে time sort করলে AM/PM সঠিকভাবে sort হয় না, তাই এটা লাগবে)
+    function startTimeToMinutes(timeRange) {
+      if (!timeRange) return 0;
+      const start = timeRange.split("-")[0].trim(); // "09:00 PM"
+      const match = start.match(/(\d+):(\d+)\s*(AM|PM)/i);
+      if (!match) return 0;
+
+      let [, hour, minute, meridiem] = match;
+      hour = parseInt(hour, 10);
+      minute = parseInt(minute, 10);
+
+      if (meridiem.toUpperCase() === "PM" && hour !== 12) hour += 12;
+      if (meridiem.toUpperCase() === "AM" && hour === 12) hour = 0;
+
+      return hour * 60 + minute;
+    }
+
+    // appointmentDate ফিল্ডে যে ফরম্যাটে স্ট্রিং সেভ আছে ("Jun 29, 2026"),
+    // ঠিক সেই একই ফরম্যাটে আজকের/গত ৭ দিনের তারিখ বানানোর হেল্পার —
+    // যাতে string ম্যাচ করানো যায়।
+    function formatLikeStored(date) {
+      return date.toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      });
+    }
+
+    //***********************************************************************************
+    // Doctor dashboard overview API Start
+    app.get("/api/dashboard/overview/:doctorId", async (req, res) => {
+      try {
+        const doctorId = req.params.doctorId;
+        const today = new Date();
+        const todayStr = formatLikeStored(today);
+
+        // ── Total Patients (distinct patientId) ──────────────────────
+        const distinctPatientIds = await paymentsCollection
+          .aggregate([
+            {
+              $match: { doctorId },
+            },
+            {
+              $group: {
+                _id: "$patientId",
+              },
+            },
+          ])
+          .toArray();
+
+        const totalPatients = distinctPatientIds.length;
+
+        // ── Today's Appointments ──────────────────────────────────────
+        const todaysAppointments = await paymentsCollection
+          .find({ doctorId, appointmentDate: todayStr })
+          .toArray();
+
+        // string time হিসেবে সেভ থাকায় lexical sort ভুল হবে, তাই minutes দিয়ে sort
+        todaysAppointments.sort(
+          (a, b) => startTimeToMinutes(a.time) - startTimeToMinutes(b.time),
+        );
+
+        const todaysCompletedCount = todaysAppointments.filter(
+          (a) => a.treadmendStatus === "completed",
+        ).length;
+
+        // ── Reviews (average rating + count) ───────────────────────────
+        const reviews = await reviewsCollection.find({ doctorId }).toArray();
+        const totalReviews = reviews.length;
+        const avgRating = totalReviews
+          ? reviews.reduce((sum, r) => sum + Number(r.rating || 0), 0) /
+            totalReviews
+          : 0;
+
+        // ── Weekly Appointment Volume (গত ৭ দিন, চার্টের জন্য) ─────────
+        // appointmentDate স্ট্রিং হওয়ায় সরাসরি date-range query করা যায় না,
+        // তাই গত ৭ দিনের প্রতিটা দিনের জন্য আলাদা করে গণনা করা হলো।
+        const weeklyVolume = [];
+        for (let i = 6; i >= 0; i--) {
+          const d = new Date();
+          d.setDate(today.getDate() - i);
+          const label = d.toLocaleDateString("en-US", { weekday: "short" }); // "Mon", "Tue"...
+          const dateStr = formatLikeStored(d);
+
+          const count = await paymentsCollection.countDocuments({
+            doctorId,
+            appointmentDate: dateStr,
+          });
+
+          weeklyVolume.push({ day: label, date: dateStr, count });
+        }
+
+        res.json({
+          totalPatients,
+          todaysAppointmentsCount: todaysAppointments.length,
+          todaysCompletedCount,
+          todaysSchedule: todaysAppointments,
+          avgRating,
+          totalReviews,
+          weeklyVolume,
+        });
+      } catch (error) {
+        console.error("Error fetching dashboard overview:", error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+    // Doctor dashboard overview API End
+    //***********************************************************************************
+
+    //***********************************************************************************
+    //***********************************************************************************
+    //***********************************************************************************
   } catch (err) {
     console.error("❌ Failed to connect to MongoDB:", err);
     process.exit(1);

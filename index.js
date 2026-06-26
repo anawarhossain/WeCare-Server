@@ -528,9 +528,8 @@ async function run() {
     // Create Prescription API Start
     app.post("/api/prescriptions/save", async (req, res) => {
       try {
-        const prescriptionData = {...req.body, createdAt: new Date()};
+        const prescriptionData = { ...req.body, createdAt: new Date() };
 
-        
         await prescriptionsCollection.insertOne(prescriptionData);
 
         res.json({
@@ -639,6 +638,59 @@ async function run() {
       }
     });
     // Edit/Update prescription by id API End
+    //***********************************************************************************
+
+    //***********************************************************************************
+    // Get all reviews by doctorId API Start
+    app.get("/api/reviews/:doctorId", async (req, res) => {
+      try {
+        const doctorId = req.params.doctorId;
+
+        const reviews = await reviewsCollection
+          .find({ doctorId: doctorId })
+          .sort({ createdAt: -1 }) // নতুন রিভিউ আগে দেখাবে
+          .toArray();
+
+        res.json(reviews);
+      } catch (error) {
+        console.error("Error fetching reviews:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    });
+    // Get all reviews by doctorId API End
+    //***********************************************************************************
+
+    //***********************************************************************************
+    // Create a new review API Start
+    app.post("/api/reviews", async (req, res) => {
+      try {
+        const { doctorId, patientId, rating, reviewText } = req.body;
+
+        if (!doctorId || !patientId || !rating) {
+          return res
+            .status(400)
+            .json({ error: "doctorId, patientId and rating are required" });
+        }
+
+        const reviewData = {
+          ...req.body,
+          rating: Number(rating), // নিশ্চিত করা যে rating সংখ্যা হিসেবেই সেভ হচ্ছে, string না
+          createdAt: new Date(),
+        };
+
+        const result = await reviewsCollection.insertOne(reviewData);
+
+        res.json({
+          success: true,
+          message: "Review submitted successfully!",
+          insertedId: result.insertedId,
+        });
+      } catch (error) {
+        console.error("Error creating review:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    });
+    // Create a new review API End
     //***********************************************************************************
 
     //***********************************************************************************

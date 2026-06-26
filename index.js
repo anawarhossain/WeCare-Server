@@ -544,6 +544,20 @@ async function run() {
     //***********************************************************************************
 
     //***********************************************************************************
+    // get appointments API Start
+    app.get("/api/appointments", async (req, res) => {
+      try {
+        const payments = await paymentsCollection.find().toArray();
+        res.json(payments);
+      } catch (error) {
+        console.error("Error fetching payments:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    });
+    // get appointments API End
+    //***********************************************************************************
+
+    //***********************************************************************************
     // Get patients appointments by doctorId API Start
     app.get("/api/appointments/:doctorId", async (req, res) => {
       try {

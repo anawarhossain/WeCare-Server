@@ -655,6 +655,26 @@ async function run() {
     //***********************************************************************************
 
     //***********************************************************************************
+    // Get reviews by userId API Start
+    app.get("/api/reviews/user/:userId", async (req, res) => {
+      try {
+        const userId = req.params.userId; 
+
+        const reviews = await reviewsCollection
+          .find({ patientId: userId })
+          .sort({ createdAt: -1 }) // নতুন রিভিউ আগে দেখাবে
+          .toArray();
+
+        res.json(reviews);
+      } catch (error) {
+        console.error("Error fetching reviews:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    });
+    // Get reviews by userId API End
+    //***********************************************************************************
+
+    //***********************************************************************************
     // Get all reviews by doctorId API Start
     app.get("/api/reviews/:doctorId", async (req, res) => {
       try {
@@ -989,6 +1009,106 @@ async function run() {
     //***********************************************************************************
     //***********************************************************************************
 
+    //
+    // ⬇️ আপনার existing express ফাইলে যুক্ত করুন
+    // doctor info enrichment আগের patient-appointments route-এর মতই দুই ধাপের join:
+    //   payment.doctorId -> doctorsCollection._id (specialization, userId)
+    //   doctor.userId     -> usersCollection._id   (name, image)
+
+    //***********************************************************************************
+    // Get patient's payment history (with doctor info + summary totals) — API Start
+    app.get("/api/payments/patient/:patientId", async (req, res) => {
+      try {
+        const patientId = req.params.patientId;
+
+        const payments = await paymentsCollection.find({ patientId }).toArray();
+
+        if (payments.length === 0) {
+          return res.json({
+            summary: { totalPaid: 0, totalTransactions: 0 },
+            transactions: [],
+          });
+        }
+
+        // ── doctor info enrichment ──────────────────────────────────────
+        const doctorIds = [...new Set(payments.map((p) => p.doctorId))];
+        const validDoctorObjectIds = doctorIds
+          .filter((id) => ObjectId.isValid(id))
+          .map((id) => new ObjectId(id));
+
+        const doctorProfiles = await doctorCollection
+          .find({ _id: { $in: validDoctorObjectIds } })
+          .toArray();
+
+        const userIds = [
+          ...new Set(doctorProfiles.map((d) => d.userId).filter(Boolean)),
+        ];
+        const validUserObjectIds = userIds
+          .filter((id) => ObjectId.isValid(id))
+          .map((id) => new ObjectId(id));
+
+        const users = await usersCollection
+          .find({ _id: { $in: validUserObjectIds } })
+          .toArray();
+        const userMap = new Map(users.map((u) => [u._id.toString(), u]));
+
+        const doctorMap = new Map(
+          doctorProfiles.map((d) => {
+            const user = userMap.get(String(d.userId));
+            return [
+              d._id.toString(),
+              {
+                name: user?.name || "Doctor",
+                image: user?.image || null,
+                specialization: d.specialization || "",
+              },
+            ];
+          }),
+        );
+
+        // ── প্রতিটা payment-কে একটা readable transaction হিসেবে সাজানো ─────
+        const transactions = payments.map((p) => {
+          const doctor = doctorMap.get(p.doctorId);
+          return {
+            _id: p._id,
+            // _id-এর শেষ ৬ ক্যারেক্টার দিয়ে একটা readable transaction ID বানানো হলো,
+            // কারণ collection-এ আলাদা কোনো invoice/transaction number ফিল্ড নেই
+            transactionId: `TXN-${p._id.toString().slice(-6).toUpperCase()}`,
+            doctorName: doctor?.name || "Doctor",
+            doctorImage: doctor?.image || null,
+            specialization: doctor?.specialization || "",
+            appointmentDate: p.appointmentDate,
+            time: p.time,
+            fee: Number(p.fee || 0),
+            paymentStatus: p.paymentStatus || "pending",
+            customerName: p.patientName || "",
+            stripeSessionId: p.stripeSessionId || "",
+          };
+        });
+
+        // নতুন তারিখ আগে
+        transactions.sort(
+          (a, b) => new Date(b.appointmentDate) - new Date(a.appointmentDate),
+        );
+
+        const totalPaid = transactions
+          .filter((t) => t.paymentStatus === "paid")
+          .reduce((sum, t) => sum + t.fee, 0);
+
+        res.json({
+          summary: {
+            totalPaid,
+            totalTransactions: transactions.length,
+          },
+          transactions,
+        });
+      } catch (error) {
+        console.error("Error fetching payment history:", error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+    // Get patient's payment history API End
+    //***********************************************************************************
     //***********************************************************************************
     //***********************************************************************************
     //***********************************************************************************

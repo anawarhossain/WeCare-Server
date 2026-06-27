@@ -547,7 +547,10 @@ async function run() {
     // get appointments API Start
     app.get("/api/appointments", async (req, res) => {
       try {
-        const payments = await paymentsCollection.find().toArray();
+        const payments = await paymentsCollection
+          .find()
+          .sort({ createdAt: -1 }) // নতুনগুলো আগে
+          .toArray();
         res.json(payments);
       } catch (error) {
         console.error("Error fetching payments:", error);
@@ -658,7 +661,7 @@ async function run() {
     // Get reviews by userId API Start
     app.get("/api/reviews/user/:userId", async (req, res) => {
       try {
-        const userId = req.params.userId; 
+        const userId = req.params.userId;
 
         const reviews = await reviewsCollection
           .find({ patientId: userId })
@@ -845,6 +848,67 @@ async function run() {
     //***********************************************************************************
 
     //***********************************************************************************
+    // Edit review by id API Start
+    app.put("/api/reviews/:id", async (req, res) => {
+      try {
+        const reviewId = req.params.id;
+        const review = req.body;
+
+        // ID ফরম্যাট ঠিক আছে কিনা চেক
+        if (!ObjectId.isValid(reviewId)) {
+          return res.status(400).json({ error: "Invalid Review ID format" });
+        }
+
+        // মঙ্গোডিবি আইডি আপডেট করার সময় ভুলেও যেন মূল _id পরিবর্তন না হয়, তাই এটি রিমুভ করে নেওয়া নিরাপদ
+        const { _id, ...updateData } = review;
+
+        const result = await reviewsCollection.updateOne(
+          { _id: new ObjectId(reviewId) },
+          { $set: updateData },
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).json({ error: "Review not found" });
+        }
+
+        res.json({ message: "Review updated successfully" });
+      } catch (error) {
+        console.error("Error updating review:", error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+    // Edit review by id API End
+    //***********************************************************************************
+
+    //***********************************************************************************
+    // Delete review by id API Start
+    app.delete("/api/reviews/:id", async (req, res) => {
+      try {
+        const reviewId = req.params.id;
+
+        // ID ফরম্যাট ঠিক আছে কিনা চেক
+        if (!ObjectId.isValid(reviewId)) {
+          return res.status(400).json({ error: "Invalid Review ID format" });
+        }
+
+        const result = await reviewsCollection.deleteOne({
+          _id: new ObjectId(reviewId),
+        });
+
+        if (result.deletedCount === 0) {
+          return res.status(404).json({ error: "Review not found" });
+        }
+
+        res.json({ message: "Review deleted successfully" });
+      } catch (error) {
+        console.error("Error deleting review:", error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+    // Delete review by id API End
+    //***********************************************************************************
+
+    //***********************************************************************************
     //***********************************************************************************
 
     // doctorCollection-এ name/image নেই — ওটা usersCollection-এ আছে, এবং
@@ -1009,8 +1073,6 @@ async function run() {
     //***********************************************************************************
     //***********************************************************************************
 
-    //
-    // ⬇️ আপনার existing express ফাইলে যুক্ত করুন
     // doctor info enrichment আগের patient-appointments route-এর মতই দুই ধাপের join:
     //   payment.doctorId -> doctorsCollection._id (specialization, userId)
     //   doctor.userId     -> usersCollection._id   (name, image)
@@ -1021,7 +1083,10 @@ async function run() {
       try {
         const patientId = req.params.patientId;
 
-        const payments = await paymentsCollection.find({ patientId }).toArray();
+        const payments = await paymentsCollection
+          .find({ patientId })
+          .sort({ createdAt: -1 })
+          .toArray();
 
         if (payments.length === 0) {
           return res.json({

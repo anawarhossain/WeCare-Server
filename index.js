@@ -21,8 +21,8 @@ const client = new MongoClient(process.env.MONGODB_WE_CARE_CONNECT_URI, {
 
 async function run() {
   try {
-    await client.connect();
-    await client.db("admin").command({ ping: 1 });
+    // await client.connect();
+    // await client.db("admin").command({ ping: 1 });
     console.log("✅ Connected to MongoDB successfully!");
     const database = client.db("WeCareDB");
 

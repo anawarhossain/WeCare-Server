@@ -1174,6 +1174,119 @@ async function run() {
     });
     // Get patient's payment history API End
     //***********************************************************************************
+
+    //***********************************************************************************
+    //***********************************************************************************
+    // Admin doctors management
+    // doctorsCollection-এ name/image নেই, usersCollection থেকে join করে আনা হচ্ছে
+    // (আগের patient-appointments/payments route-এর মতই pattern)
+
+    //***********************************************************************************
+    // Get all doctors for admin (with user info + status counts) — API Start
+    app.get("/api/admin/doctors", async (req, res) => {
+      try {
+        const doctorProfiles = await doctorCollection.find({}).toArray();
+
+        if (doctorProfiles.length === 0) {
+          return res.json({
+            doctors: [],
+            counts: { all: 0, pending: 0, verified: 0, rejected: 0 },
+          });
+        }
+
+        const userIds = [
+          ...new Set(doctorProfiles.map((d) => d.userId).filter(Boolean)),
+        ];
+        const validUserObjectIds = userIds
+          .filter((id) => ObjectId.isValid(id))
+          .map((id) => new ObjectId(id));
+
+        const users = await usersCollection
+          .find({ _id: { $in: validUserObjectIds } })
+          .toArray();
+        const userMap = new Map(users.map((u) => [u._id.toString(), u]));
+
+        const doctors = doctorProfiles.map((d) => {
+          const user = userMap.get(String(d.userId));
+          return {
+            _id: d._id,
+            name: user?.name || "Unknown Doctor",
+            image: user?.image || null,
+            email: user?.email || "",
+            phone: user?.phone || "",
+            gender: user?.gender || "",
+            specialization: d.specialization || "",
+            specializations: d.specializations || [],
+            awards: d.awards || [],
+            qualifications: d.qualifications || "",
+            experience: d.experience || 0,
+            consultationFee: d.consultationFee || "",
+            hospitalName: d.hospitalName || "",
+            bio: d.bio || "",
+            // verificationStatus-এর সম্ভাব্য মান: "Pending" | "Verified" | "Rejected"
+            verificationStatus: d.verificationStatus || "Pending",
+            createdAt: d.createdAt,
+          };
+        });
+
+        // নতুন আবেদনকারী আগে দেখানো
+        doctors.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+        const counts = {
+          all: doctors.length,
+          pending: 0,
+          verified: 0,
+          rejected: 0,
+        };
+        doctors.forEach((d) => {
+          const key = d.verificationStatus.toLowerCase();
+          if (counts[key] !== undefined) counts[key] += 1;
+        });
+
+        res.json({ doctors, counts });
+      } catch (error) {
+        console.error("Error fetching admin doctors:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    });
+    // Get all doctors for admin API End
+    //***********************************************************************************
+
+    //***********************************************************************************
+    // Update a doctor's verification status — API Start
+    app.put("/api/admin/doctors/:id/status", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const { verificationStatus } = req.body;
+
+        const allowedStatuses = ["Pending", "Verified", "Rejected"];
+        if (!allowedStatuses.includes(verificationStatus)) {
+          return res
+            .status(400)
+            .json({ error: "Invalid verificationStatus value" });
+        }
+
+        const result = await doctorCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { verificationStatus, updatedAt: new Date() } },
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).json({ error: "Doctor not found" });
+        }
+
+        res.json({
+          success: true,
+          message: `Doctor marked as ${verificationStatus}.`,
+        });
+      } catch (error) {
+        console.error("Error updating doctor verification status:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    });
+    // Update a doctor's verification status API End
+    //***********************************************************************************
+
     //***********************************************************************************
     //***********************************************************************************
     //***********************************************************************************

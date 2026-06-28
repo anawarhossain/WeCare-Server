@@ -1408,6 +1408,126 @@ async function run() {
 
     //***********************************************************************************
     //***********************************************************************************
+    // Admin Appointments Overview API Start
+    // নোট: ক্যান্সেল করার জন্য আলাদা route লাগবে না — আগের তৈরি করা
+    // PUT /api/appointments/:id (treadmendStatus আপডেট করে) এটাই reuse করা হচ্ছে।
+    // patientName/patientImage paymentsCollection-এই denormalized আছে, তাই শুধু
+    // doctor info-র জন্য join লাগবে (doctorsCollection -> usersCollection, আগের pattern)
+
+    //***********************************************************************************
+    // Admin: all appointments overview (with doctor info + stats) — API Start
+    app.get("/api/admin/appointments/overview", async (req, res) => {
+      try {
+        const appointments = await paymentsCollection.find({}).toArray();
+
+        if (appointments.length === 0) {
+          return res.json({
+            stats: {
+              total: 0,
+              upcoming: 0,
+              completed: 0,
+              cancelled: 0,
+              totalRevenue: 0,
+            },
+            appointments: [],
+          });
+        }
+
+        // ── doctor info enrichment ──────────────────────────────────────
+        const doctorIds = [...new Set(appointments.map((a) => a.doctorId))];
+        const validDoctorObjectIds = doctorIds
+          .filter((id) => ObjectId.isValid(id))
+          .map((id) => new ObjectId(id));
+
+        const doctorProfiles = await doctorCollection
+          .find({ _id: { $in: validDoctorObjectIds } })
+          .toArray();
+
+        const userIds = [
+          ...new Set(doctorProfiles.map((d) => d.userId).filter(Boolean)),
+        ];
+        const validUserObjectIds = userIds
+          .filter((id) => ObjectId.isValid(id))
+          .map((id) => new ObjectId(id));
+
+        const users = await usersCollection
+          .find({ _id: { $in: validUserObjectIds } })
+          .toArray();
+        const userMap = new Map(users.map((u) => [u._id.toString(), u]));
+
+        const doctorMap = new Map(
+          doctorProfiles.map((d) => {
+            const user = userMap.get(String(d.userId));
+            return [
+              d._id.toString(),
+              {
+                name: user?.name || "Doctor",
+                image: user?.image || null,
+                specialization: d.specialization || "",
+              },
+            ];
+          }),
+        );
+
+        const enriched = appointments.map((a) => {
+          const doctor = doctorMap.get(a.doctorId);
+          return {
+            _id: a._id,
+            patientId: a.patientId,
+            patientName: a.patientName,
+            patientImage: a.patientImage,
+            doctorName: doctor?.name || "Doctor",
+            doctorImage: doctor?.image || null,
+            specialization: doctor?.specialization || "",
+            appointmentDate: a.appointmentDate,
+            time: a.time,
+            fee: Number(a.fee || 0),
+            notes: a.notes || "",
+            paymentStatus: a.paymentStatus || "pending",
+            customerCardName: a.customerCardName || "",
+            treadmendStatus: a.treadmendStatus || "pending",
+          };
+        });
+
+        // নতুন তারিখ আগে
+        enriched.sort(
+          (a, b) => new Date(b.appointmentDate) - new Date(a.appointmentDate),
+        );
+
+        // ── overview stats ───────────────────────────────────────────
+        const stats = enriched.reduce(
+          (acc, a) => {
+            acc.total += 1;
+            if (
+              a.treadmendStatus === "pending" ||
+              a.treadmendStatus === "accepted"
+            )
+              acc.upcoming += 1;
+            else if (a.treadmendStatus === "completed") acc.completed += 1;
+            else if (a.treadmendStatus === "rejected") acc.cancelled += 1;
+            if (a.paymentStatus === "paid") acc.totalRevenue += a.fee;
+            return acc;
+          },
+          {
+            total: 0,
+            upcoming: 0,
+            completed: 0,
+            cancelled: 0,
+            totalRevenue: 0,
+          },
+        );
+
+        res.json({ stats, appointments: enriched });
+      } catch (error) {
+        console.error("Error fetching admin appointments overview:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    });
+    // Admin: all appointments overview API End
+    //***********************************************************************************
+
+    //***********************************************************************************
+    //***********************************************************************************
     //***********************************************************************************
   } catch (err) {
     console.error("❌ Failed to connect to MongoDB:", err);

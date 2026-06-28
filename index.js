@@ -1289,6 +1289,125 @@ async function run() {
 
     //***********************************************************************************
     //***********************************************************************************
+    // Admin patients management
+    // usersCollection-এ doctor/patient/admin সব role একসাথে আছে, তাই role:"patient"
+    // দিয়ে ফিল্টার করে আনতে হবে। সাথে paymentsCollection থেকে প্রতিটা patient-এর
+    // total appointments + total spent aggregate করে যুক্ত করা হলো।
+
+    //***********************************************************************************
+    // Get all patients for admin (with appointment stats) — API Start
+    app.get("/api/admin/patients", async (req, res) => {
+      try {
+        const patients = await usersCollection
+          .find({ role: "patient" })
+          .toArray();
+
+        if (patients.length === 0) {
+          return res.json({
+            patients: [],
+            counts: { all: 0, active: 0, suspended: 0 },
+          });
+        }
+
+        // ── প্রতিটা patientId-এর জন্য total appointments + total spent ──────
+        const stats = await paymentsCollection
+          .aggregate([
+            {
+              $group: {
+                _id: "$patientId",
+                totalAppointments: { $sum: 1 },
+                totalSpent: {
+                  $sum: {
+                    $cond: [
+                      { $eq: ["$paymentStatus", "paid"] },
+                      { $toDouble: "$fee" },
+                      0,
+                    ],
+                  },
+                },
+              },
+            },
+          ])
+          .toArray();
+
+        const statsMap = new Map(stats.map((s) => [s._id, s]));
+
+        const enrichedPatients = patients.map((p) => {
+          const stat = statsMap.get(p._id.toString());
+          return {
+            _id: p._id,
+            name: p.name || "Unknown",
+            email: p.email || "",
+            phone: p.phone || "",
+            gender: p.gender || "",
+            image: p.image || null,
+            // status ফিল্ডে কিছু না থাকলে ধরে নেওয়া হলো account active
+            status: p.status || "active",
+            createdAt: p.createdAt,
+            totalAppointments: stat?.totalAppointments || 0,
+            totalSpent: stat?.totalSpent || 0,
+          };
+        });
+
+        // নতুন রেজিস্ট্রেশন আগে
+        enrichedPatients.sort(
+          (a, b) => new Date(b.createdAt) - new Date(a.createdAt),
+        );
+
+        const counts = {
+          all: enrichedPatients.length,
+          active: 0,
+          suspended: 0,
+        };
+        enrichedPatients.forEach((p) => {
+          const key = p.status.toLowerCase();
+          if (counts[key] !== undefined) counts[key] += 1;
+        });
+
+        res.json({ patients: enrichedPatients, counts });
+      } catch (error) {
+        console.error("Error fetching admin patients:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    });
+    // Get all patients for admin API End
+    //***********************************************************************************
+
+    //***********************************************************************************
+    // Update a patient's account status (active/suspended) — API Start
+    app.put("/api/admin/patients/:id/status", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const { status } = req.body;
+
+        const allowedStatuses = ["active", "suspended"];
+        if (!allowedStatuses.includes(status)) {
+          return res.status(400).json({ error: "Invalid status value" });
+        }
+
+        const result = await usersCollection.updateOne(
+          { _id: new ObjectId(id), role: "patient" }, // role চেক করা হলো যাতে ভুলে doctor/admin আপডেট না হয়
+          { $set: { status, updatedAt: new Date() } },
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).json({ error: "Patient not found" });
+        }
+
+        res.json({
+          success: true,
+          message: `Patient account marked as ${status}.`,
+        });
+      } catch (error) {
+        console.error("Error updating patient status:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    });
+    // Update a patient's account status API End
+    //***********************************************************************************
+
+    //***********************************************************************************
+    //***********************************************************************************
     //***********************************************************************************
   } catch (err) {
     console.error("❌ Failed to connect to MongoDB:", err);

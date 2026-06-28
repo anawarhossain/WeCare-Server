@@ -33,6 +33,7 @@ async function run() {
     const schedulesCollection = database.collection("schedules");
     const paymentsCollection = database.collection("payments");
     const prescriptionsCollection = database.collection("prescriptions");
+    const contactsCollection = database.collection("contacts");
 
     // Root
     app.get("/", (req, res) => {
@@ -42,6 +43,20 @@ async function run() {
     //***********************************************************************************
     //***********************************************************************************
     //***********************************************************************************
+
+
+    //***********************************************************************************
+    //***********************************************************************************
+    // Create Contacts api Start
+    app.post("/api/contacts", async (req, res) => {
+      const contact = req.body;
+      const result = await contactsCollection.insertOne(contact);
+      res.json(result);
+    });
+    // Contacts api End
+    //***********************************************************************************
+    //***********************************************************************************
+
 
     //***********************************************************************************
     // Get all users from the user collection Start

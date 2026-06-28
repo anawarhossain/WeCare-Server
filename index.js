@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const { createRemoteJWKSet, jwtVerify } = require("jose-cjs");
 
 dotenv.config();
 
@@ -18,6 +19,34 @@ const client = new MongoClient(process.env.MONGODB_WE_CARE_CONNECT_URI, {
     deprecationErrors: true,
   },
 });
+
+const JWKS = createRemoteJWKSet(
+  new URL(`${process.env.NEXT_CLIENT_SITE_URL}/api/auth/jwks`),
+);
+
+const verifyToken = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith("Bearer")) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const token = authHeader.split(" ")[1];
+  console.log(token);
+  if (!token) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    const { payload } = await jwtVerify(token, JWKS);
+    console.log(payload);
+
+    next();
+  } catch (error) {
+    console.error(error);
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+};
 
 async function run() {
   try {
@@ -77,7 +106,6 @@ async function run() {
         res.status(500).json({ error: error.message });
       }
     });
-    
 
     // ২. ফেভারিট টগল (Add/Remove) করার API
     app.post("/api/favorites/toggle", async (req, res) => {
@@ -116,7 +144,6 @@ async function run() {
         res.status(500).json({ error: error.message });
       }
     });
-
 
     // ৩ ফেভারিট লিস্ট গেট করার API
     app.get("/api/favorites/:userId", async (req, res) => {
@@ -798,7 +825,7 @@ async function run() {
 
     //***********************************************************************************
     // Create a new review API Start
-    app.post("/api/reviews", async (req, res) => {
+    app.post("/api/reviews", verifyToken, async (req, res) => {
       try {
         const { doctorId, patientId, rating, reviewText } = req.body;
 
@@ -1053,7 +1080,7 @@ async function run() {
 
     //***********************************************************************************
     // Get all appointments for a patient (with doctor info + live queue/wait time) — API Start
-    app.get("/api/appointments/patient/:patientId", async (req, res) => {
+    app.get("/api/appointments/patient/:patientId", verifyToken, async (req, res) => {
       try {
         const patientId = req.params.patientId;
 
@@ -1282,7 +1309,7 @@ async function run() {
 
     //***********************************************************************************
     // Get all doctors for admin (with user info + status counts) — API Start
-    app.get("/api/admin/doctors", async (req, res) => {
+    app.get("/api/admin/doctors", verifyToken, async (req, res) => {
       try {
         const doctorProfiles = await doctorCollection.find({}).toArray();
 
@@ -1353,7 +1380,7 @@ async function run() {
 
     //***********************************************************************************
     // Update a doctor's verification status — API Start
-    app.put("/api/admin/doctors/:id/status", async (req, res) => {
+    app.put("/api/admin/doctors/:id/status",  async (req, res) => {
       try {
         const id = req.params.id;
         const { verificationStatus } = req.body;
@@ -1515,7 +1542,7 @@ async function run() {
 
     //***********************************************************************************
     // Admin: all appointments overview (with doctor info + stats) — API Start
-    app.get("/api/admin/appointments/overview", async (req, res) => {
+    app.get("/api/admin/appointments/overview", verifyToken, async (req, res) => {
       try {
         const appointments = await paymentsCollection.find({}).toArray();
 
@@ -2344,9 +2371,7 @@ async function run() {
           await Promise.all([
             usersCollection.find({}).toArray(),
             // পাবলিক পেজে শুধু verified doctor-ই দেখানো হবে, pending/rejected বাদ
-            doctorCollection
-              .find({ verificationStatus: "Verified" })
-              .toArray(),
+            doctorCollection.find({ verificationStatus: "Verified" }).toArray(),
             paymentsCollection.find({}).toArray(),
             reviewsCollection.find({}).toArray(),
           ]);

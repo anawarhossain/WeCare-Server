@@ -1528,6 +1528,254 @@ async function run() {
 
     //***********************************************************************************
     //***********************************************************************************
+    // Admin dashboard Overview API Start
+
+    function monthKey(date) {
+      return `${date.getFullYear()}-${date.getMonth()}`;
+    }
+
+    function percentChange(current, previous) {
+      if (previous === 0) return current > 0 ? 100 : 0;
+      return Math.round(((current - previous) / previous) * 100);
+    }
+
+    function timeAgo(date) {
+      const diffMs = Date.now() - new Date(date).getTime();
+      const mins = Math.floor(diffMs / 60000);
+      if (mins < 1) return "Just now";
+      if (mins < 60) return `${mins} min${mins === 1 ? "" : "s"} ago`;
+      const hours = Math.floor(mins / 60);
+      if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+      const days = Math.floor(hours / 24);
+      return `${days} day${days === 1 ? "" : "s"} ago`;
+    }
+
+    //***********************************************************************************
+    // Admin: dashboard overview (stats + charts + activity feed) — API Start
+    app.get("/api/admin/dashboard/overview", async (req, res) => {
+      try {
+        const now = new Date();
+        const thisMonthKey = monthKey(now);
+        const lastMonthDate = new Date(
+          now.getFullYear(),
+          now.getMonth() - 1,
+          1,
+        );
+        const lastMonthKey = monthKey(lastMonthDate);
+
+        // ── সব raw data একবারে আনা হলো ────────────────────────────────
+        const [allUsers, allDoctors, allPayments, allReviews] =
+          await Promise.all([
+            usersCollection.find({}).toArray(),
+            doctorCollection.find({}).toArray(),
+            paymentsCollection.find({}).toArray(),
+            reviewsCollection.find({}).toArray(),
+          ]);
+
+        // ── Total Users + month-over-month trend (real createdAt ব্যবহার করে) ──
+        const usersThisMonth = allUsers.filter(
+          (u) =>
+            u.createdAt && monthKey(new Date(u.createdAt)) === thisMonthKey,
+        ).length;
+        const usersLastMonth = allUsers.filter(
+          (u) =>
+            u.createdAt && monthKey(new Date(u.createdAt)) === lastMonthKey,
+        ).length;
+
+        // ── Total Doctors + trend ──────────────────────────────────────
+        const doctorsThisMonth = allDoctors.filter(
+          (d) =>
+            d.createdAt && monthKey(new Date(d.createdAt)) === thisMonthKey,
+        ).length;
+        const doctorsLastMonth = allDoctors.filter(
+          (d) =>
+            d.createdAt && monthKey(new Date(d.createdAt)) === lastMonthKey,
+        ).length;
+
+        // ── Total Appointments + trend (appointmentDate string ব্যবহার করে) ──
+        const apptsThisMonth = allPayments.filter(
+          (p) =>
+            p.appointmentDate &&
+            monthKey(new Date(p.appointmentDate)) === thisMonthKey,
+        ).length;
+        const apptsLastMonth = allPayments.filter(
+          (p) =>
+            p.appointmentDate &&
+            monthKey(new Date(p.appointmentDate)) === lastMonthKey,
+        ).length;
+
+        // ── Total Revenue + trend (paid appointments-এর fee যোগ করে) ──
+        const paidPayments = allPayments.filter(
+          (p) => p.paymentStatus === "paid",
+        );
+        const totalRevenue = paidPayments.reduce(
+          (sum, p) => sum + Number(p.fee || 0),
+          0,
+        );
+        const revenueThisMonth = paidPayments
+          .filter(
+            (p) =>
+              p.appointmentDate &&
+              monthKey(new Date(p.appointmentDate)) === thisMonthKey,
+          )
+          .reduce((sum, p) => sum + Number(p.fee || 0), 0);
+        const revenueLastMonth = paidPayments
+          .filter(
+            (p) =>
+              p.appointmentDate &&
+              monthKey(new Date(p.appointmentDate)) === lastMonthKey,
+          )
+          .reduce((sum, p) => sum + Number(p.fee || 0), 0);
+
+        const stats = {
+          totalUsers: allUsers.length,
+          totalUsersTrend: percentChange(usersThisMonth, usersLastMonth),
+          totalDoctors: allDoctors.length,
+          totalDoctorsTrend: percentChange(doctorsThisMonth, doctorsLastMonth),
+          totalAppointments: allPayments.length,
+          totalAppointmentsTrend: percentChange(apptsThisMonth, apptsLastMonth),
+          totalRevenue,
+          totalRevenueTrend: percentChange(revenueThisMonth, revenueLastMonth),
+        };
+
+        // ── Monthly appointment volume — গত ৬ মাস ───────────────────────
+        const monthlyVolume = [];
+        for (let i = 5; i >= 0; i--) {
+          const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+          const key = monthKey(d);
+          const count = allPayments.filter(
+            (p) =>
+              p.appointmentDate &&
+              monthKey(new Date(p.appointmentDate)) === key,
+          ).length;
+          monthlyVolume.push({
+            month: d.toLocaleDateString("en-US", { month: "short" }),
+            count,
+          });
+        }
+
+        // ── Doctor specialization breakdown (donut chart) ────────────────
+        const specializationCounts = {};
+        allDoctors.forEach((d) => {
+          const spec = d.specialization || "Other";
+          specializationCounts[spec] = (specializationCounts[spec] || 0) + 1;
+        });
+        const specializationBreakdown = Object.entries(specializationCounts)
+          .map(([specialization, count]) => ({ specialization, count }))
+          .sort((a, b) => b.count - a.count)
+          .slice(0, 6); // টপ ৬টা specialization, বাকিগুলো chart-কে অগোছালো করে ফেলবে
+
+        // ── Doctor performance — average rating by doctor (top 5) ────────
+        const userMap = new Map(allUsers.map((u) => [u._id.toString(), u]));
+        const reviewsByDoctor = new Map();
+        allReviews.forEach((r) => {
+          const entry = reviewsByDoctor.get(r.doctorId) || { sum: 0, count: 0 };
+          entry.sum += Number(r.rating || 0);
+          entry.count += 1;
+          reviewsByDoctor.set(r.doctorId, entry);
+        });
+
+        const doctorPerformance = allDoctors
+          .map((d) => {
+            const reviewStats = reviewsByDoctor.get(d._id.toString());
+            if (!reviewStats || reviewStats.count === 0) return null;
+            const user = userMap.get(String(d.userId));
+            return {
+              doctorName: user?.name || "Doctor",
+              avgRating: reviewStats.sum / reviewStats.count,
+              totalReviews: reviewStats.count,
+            };
+          })
+          .filter(Boolean)
+          .sort((a, b) => b.avgRating - a.avgRating)
+          .slice(0, 5);
+
+        // ── Recent Activity Feed — একাধিক collection থেকে merge করা ──────
+        // (paymentsCollection-এ কোনো "booked at" timestamp না থাকায়, appointment/payment
+        // ইভেন্টে আসল "X min ago" না দেখিয়ে appointmentDate-টাই দেখানো হচ্ছে — সততার খাতিরে)
+        const feed = [];
+
+        [...allUsers]
+          .filter((u) => u.role === "patient" && u.createdAt)
+          .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+          .slice(0, 5)
+          .forEach((u) => {
+            feed.push({
+              type: "patient_registered",
+              title: `New Patient Registered: ${u.name}`,
+              subtitle: "Patient account created on the platform.",
+              sortDate: new Date(u.createdAt),
+              displayTime: timeAgo(u.createdAt),
+            });
+          });
+
+        [...allDoctors]
+          .filter((d) => d.createdAt)
+          .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+          .slice(0, 5)
+          .forEach((d) => {
+            const user = userMap.get(String(d.userId));
+            feed.push({
+              type: "doctor_joined",
+              title: `New Doctor Joined: ${user?.name || "Doctor"}`,
+              subtitle: `Registered under ${d.specialization || "General"}.`,
+              sortDate: new Date(d.createdAt),
+              displayTime: timeAgo(d.createdAt),
+            });
+          });
+
+        [...allPayments]
+          .filter((p) => p.treadmendStatus === "completed" && p.appointmentDate)
+          .sort(
+            (a, b) => new Date(b.appointmentDate) - new Date(a.appointmentDate),
+          )
+          .slice(0, 5)
+          .forEach((p) => {
+            feed.push({
+              type: "appointment_completed",
+              title: `Appointment Completed: ${p.patientName}`,
+              subtitle: "Consultation marked as completed.",
+              sortDate: new Date(p.appointmentDate),
+              displayTime: p.appointmentDate, // আসল completion timestamp নেই, তাই তারিখটাই দেখানো হলো
+            });
+          });
+
+        [...paidPayments]
+          .filter((p) => p.appointmentDate)
+          .sort(
+            (a, b) => new Date(b.appointmentDate) - new Date(a.appointmentDate),
+          )
+          .slice(0, 5)
+          .forEach((p) => {
+            feed.push({
+              type: "payment_received",
+              title: `Payment Received: $${Number(p.fee).toFixed(2)} from ${p.patientName}`,
+              subtitle: "Payment cleared successfully.",
+              sortDate: new Date(p.appointmentDate),
+              displayTime: p.appointmentDate,
+            });
+          });
+
+        feed.sort((a, b) => b.sortDate - a.sortDate);
+        const activityFeed = feed.slice(0, 8);
+
+        res.json({
+          stats,
+          monthlyVolume,
+          specializationBreakdown,
+          doctorPerformance,
+          activityFeed,
+        });
+      } catch (error) {
+        console.error("Error fetching admin dashboard overview:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    });
+    // Admin: dashboard overview API End
+    //***********************************************************************************
+
+    //***********************************************************************************
+    //***********************************************************************************
     //***********************************************************************************
   } catch (err) {
     console.error("❌ Failed to connect to MongoDB:", err);

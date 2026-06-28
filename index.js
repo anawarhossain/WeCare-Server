@@ -118,7 +118,21 @@ async function run() {
     });
 
 
-    
+    // ৩ ফেভারিট লিস্ট গেট করার API
+    app.get("/api/favorites", async (req, res) => {
+      try {
+        const { userId } = req.query;
+        if (!userId) {
+          return res.status(400).json({ error: "Missing userId" });
+        }
+        const favorites = await favoriteDoctoreCollection
+          .find({ userId })
+          .toArray();
+        res.json(favorites);
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    })
     // Patient Favorite Doctors api End
     //***********************************************************************************
     //***********************************************************************************

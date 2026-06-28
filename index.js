@@ -34,6 +34,7 @@ async function run() {
     const paymentsCollection = database.collection("payments");
     const prescriptionsCollection = database.collection("prescriptions");
     const contactsCollection = database.collection("contacts");
+    const favoriteDoctoreCollection = database.collection("favoriteDoctors");
 
     // Root
     app.get("/", (req, res) => {
@@ -53,6 +54,68 @@ async function run() {
       res.json(result);
     });
     // Contacts api End
+    //***********************************************************************************
+    //***********************************************************************************
+
+    //***********************************************************************************
+    //***********************************************************************************
+    // Patient Favorite Doctors api Start
+    // ১. ইউজার এই ডাক্তারকে ফেভারিট করেছে কিনা তা চেক করার API
+    app.get("/api/favorites/check", async (req, res) => {
+      try {
+        const { userId, doctorId } = req.query;
+        if (!userId || !doctorId) {
+          return res.status(400).json({ error: "Missing userId or doctorId" });
+        }
+
+        const favorite = await favoriteDoctoreCollection.findOne({
+          userId,
+          doctorId,
+        });
+        res.json({ isFavorite: !!favorite }); // থাকলে true, না থাকলে false রিটার্ন করবে
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    // ২. ফেভারিট টগল (Add/Remove) করার API
+    app.post("/api/favorites/toggle", async (req, res) => {
+      try {
+        const { userId, doctorId, doctorData } = req.body;
+        if (!userId || !doctorId) {
+          return res.status(400).json({ error: "Missing userId or doctorId" });
+        }
+
+        // অলরেডি ফেভারিট লিস্টে আছে কিনা চেক করুন
+        const existing = await favoriteDoctoreCollection.findOne({
+          userId,
+          doctorId,
+        });
+
+        if (existing) {
+          // থাকলে রিমুভ করে দিন
+          await favoriteDoctoreCollection.deleteOne({ userId, doctorId });
+          return res.json({
+            isFavorite: false,
+            message: "Removed from favorites",
+          });
+        } else {
+          // না থাকলে নতুন করে সেভ করুন
+          await favoriteDoctoreCollection.insertOne({
+            userId,
+            doctorId,
+            doctorName: doctorData?.name,
+            doctorImage: doctorData?.image,
+            specialization: doctorData?.specialization,
+            createdAt: new Date(),
+          });
+          return res.json({ isFavorite: true, message: "Added to favorites" });
+        }
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+    // Patient Favorite Doctors api End
     //***********************************************************************************
     //***********************************************************************************
 
@@ -2001,6 +2064,248 @@ async function run() {
       }
     });
     // Patient dashboard overview API End
+    //***********************************************************************************
+
+    //***********************************************************************************
+    //***********************************************************************************
+    // Admin payments overview API Start
+    // doctor info enrichment আগের admin-appointments route-এর মতই দুই ধাপের join
+
+    function monthKey(date) {
+      return `${date.getFullYear()}-${date.getMonth()}`;
+    }
+
+    function dayKey(date) {
+      return date.toISOString().slice(0, 10); // YYYY-MM-DD
+    }
+
+    function startOfWeek(date) {
+      const d = new Date(date);
+      const day = d.getDay();
+      d.setDate(d.getDate() - day);
+      d.setHours(0, 0, 0, 0);
+      return d;
+    }
+
+    //***********************************************************************************
+    // Admin: payments overview (stats + multi-range revenue chart + ledger) — API Start
+    app.get("/api/admin/payments/overview", async (req, res) => {
+      try {
+        const allPayments = await paymentsCollection.find({}).toArray();
+        const now = new Date();
+
+        if (allPayments.length === 0) {
+          return res.json({
+            stats: {
+              totalRevenue: 0,
+              totalRevenueTrend: 0,
+              totalTransactions: 0,
+              transactionsLast30Days: 0,
+              thisMonthRevenue: 0,
+              thisMonthRevenueTrend: 0,
+            },
+            revenueByDay: [],
+            revenueByWeek: [],
+            revenueByMonth: [],
+            transactions: [],
+          });
+        }
+
+        // ── doctor info enrichment (দুই ধাপের join, আগের pattern) ────────
+        const doctorIds = [...new Set(allPayments.map((p) => p.doctorId))];
+        const validDoctorObjectIds = doctorIds
+          .filter((id) => ObjectId.isValid(id))
+          .map((id) => new ObjectId(id));
+        const doctorProfiles = await doctorCollection
+          .find({ _id: { $in: validDoctorObjectIds } })
+          .toArray();
+        const userIds = [
+          ...new Set(doctorProfiles.map((d) => d.userId).filter(Boolean)),
+        ];
+        const validUserObjectIds = userIds
+          .filter((id) => ObjectId.isValid(id))
+          .map((id) => new ObjectId(id));
+        const users = await usersCollection
+          .find({ _id: { $in: validUserObjectIds } })
+          .toArray();
+        const userMap = new Map(users.map((u) => [u._id.toString(), u]));
+        const doctorMap = new Map(
+          doctorProfiles.map((d) => {
+            const user = userMap.get(String(d.userId));
+            return [
+              d._id.toString(),
+              {
+                name: user?.name || "Doctor",
+                image: user?.image || null,
+                specialization: d.specialization || "",
+              },
+            ];
+          }),
+        );
+
+        const paidPayments = allPayments.filter(
+          (p) => p.paymentStatus === "paid",
+        );
+
+        // ── Stats ────────────────────────────────────────────────────────
+        const totalRevenue = paidPayments.reduce(
+          (sum, p) => sum + Number(p.fee || 0),
+          0,
+        );
+
+        const thisMonthKey = monthKey(now);
+        const lastMonthDate = new Date(
+          now.getFullYear(),
+          now.getMonth() - 1,
+          1,
+        );
+        const lastMonthKeyStr = monthKey(lastMonthDate);
+
+        const thisMonthRevenue = paidPayments
+          .filter(
+            (p) =>
+              p.appointmentDate &&
+              monthKey(new Date(p.appointmentDate)) === thisMonthKey,
+          )
+          .reduce((sum, p) => sum + Number(p.fee || 0), 0);
+        const lastMonthRevenue = paidPayments
+          .filter(
+            (p) =>
+              p.appointmentDate &&
+              monthKey(new Date(p.appointmentDate)) === lastMonthKeyStr,
+          )
+          .reduce((sum, p) => sum + Number(p.fee || 0), 0);
+
+        const totalRevenueTrend =
+          lastMonthRevenue === 0
+            ? thisMonthRevenue > 0
+              ? 100
+              : 0
+            : Math.round(
+                ((thisMonthRevenue - lastMonthRevenue) / lastMonthRevenue) *
+                  100,
+              );
+
+        const thirtyDaysAgo = new Date(now);
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        const transactionsLast30Days = allPayments.filter(
+          (p) =>
+            p.appointmentDate && new Date(p.appointmentDate) >= thirtyDaysAgo,
+        ).length;
+
+        const stats = {
+          totalRevenue,
+          totalRevenueTrend,
+          totalTransactions: allPayments.length,
+          transactionsLast30Days,
+          thisMonthRevenue,
+          thisMonthRevenueTrend: totalRevenueTrend, // একই মাসিক তুলনা থেকে আসছে
+        };
+
+        // ── Revenue chart: ৩টা ভিন্ন রেঞ্জ একসাথে প্রিকম্পিউট করা হলো ──────
+        // (client-এ "Last 30 Days / Last 3 Months / Last Year" সিলেক্ট করলে আর
+        // নতুন request লাগবে না, একবারেই সব ডেটা চলে আসছে)
+
+        // Last 30 days — daily
+        const revenueByDay = [];
+        for (let i = 29; i >= 0; i--) {
+          const d = new Date(now);
+          d.setDate(d.getDate() - i);
+          const key = dayKey(d);
+          const revenue = paidPayments
+            .filter(
+              (p) =>
+                p.appointmentDate &&
+                dayKey(new Date(p.appointmentDate)) === key,
+            )
+            .reduce((sum, p) => sum + Number(p.fee || 0), 0);
+          revenueByDay.push({
+            label: d.toLocaleDateString("en-US", {
+              month: "short",
+              day: "numeric",
+            }),
+            revenue,
+          });
+        }
+
+        // Last 3 months — weekly (~13 সপ্তাহ)
+        const revenueByWeek = [];
+        for (let i = 12; i >= 0; i--) {
+          const weekStart = startOfWeek(
+            new Date(now.getFullYear(), now.getMonth(), now.getDate() - i * 7),
+          );
+          const weekEnd = new Date(weekStart);
+          weekEnd.setDate(weekEnd.getDate() + 7);
+          const revenue = paidPayments
+            .filter((p) => {
+              if (!p.appointmentDate) return false;
+              const d = new Date(p.appointmentDate);
+              return d >= weekStart && d < weekEnd;
+            })
+            .reduce((sum, p) => sum + Number(p.fee || 0), 0);
+          revenueByWeek.push({
+            label: weekStart.toLocaleDateString("en-US", {
+              month: "short",
+              day: "numeric",
+            }),
+            revenue,
+          });
+        }
+
+        // Last 12 months — monthly
+        const revenueByMonth = [];
+        for (let i = 11; i >= 0; i--) {
+          const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+          const key = monthKey(d);
+          const revenue = paidPayments
+            .filter(
+              (p) =>
+                p.appointmentDate &&
+                monthKey(new Date(p.appointmentDate)) === key,
+            )
+            .reduce((sum, p) => sum + Number(p.fee || 0), 0);
+          revenueByMonth.push({
+            label: d.toLocaleDateString("en-US", { month: "short" }),
+            revenue,
+          });
+        }
+
+        // ── Transaction Ledger ────────────────────────────────────────────
+        const transactions = allPayments.map((p) => {
+          const doctor = doctorMap.get(p.doctorId);
+          return {
+            _id: p._id,
+            transactionId: `TXN-${p._id.toString().slice(-6).toUpperCase()}`,
+            patientName: p.patientName,
+            patientImage: p.patientImage,
+            doctorName: doctor?.name || "Doctor",
+            doctorImage: doctor?.image || null,
+            specialization: doctor?.specialization || "",
+            fee: Number(p.fee || 0),
+            appointmentDate: p.appointmentDate,
+            time: p.time,
+            paymentStatus: p.paymentStatus || "pending",
+            customerCardName: p.customerCardName || "",
+          };
+        });
+
+        transactions.sort(
+          (a, b) => new Date(b.appointmentDate) - new Date(a.appointmentDate),
+        );
+
+        res.json({
+          stats,
+          revenueByDay,
+          revenueByWeek,
+          revenueByMonth,
+          transactions,
+        });
+      } catch (error) {
+        console.error("Error fetching admin payments overview:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    });
+    // Admin: payments overview API End
     //***********************************************************************************
 
     //***********************************************************************************

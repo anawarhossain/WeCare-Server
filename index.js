@@ -44,7 +44,6 @@ async function run() {
     //***********************************************************************************
     //***********************************************************************************
 
-
     //***********************************************************************************
     //***********************************************************************************
     // Create Contacts api Start
@@ -56,7 +55,6 @@ async function run() {
     // Contacts api End
     //***********************************************************************************
     //***********************************************************************************
-
 
     //***********************************************************************************
     // Get all users from the user collection Start
@@ -1787,6 +1785,222 @@ async function run() {
       }
     });
     // Admin: dashboard overview API End
+    //***********************************************************************************
+
+    //***********************************************************************************
+    //***********************************************************************************
+    // Patient Dashboard API Start
+    // doctor enrichment + queue/wait-time logic আগের patient-appointments route থেকে reuse করা হলো
+
+    function startTimeToMinutes(timeRange) {
+      if (!timeRange) return 0;
+      const start = timeRange.split("-")[0].trim();
+      const match = start.match(/(\d+):(\d+)\s*(AM|PM)/i);
+      if (!match) return 0;
+      let [, hour, minute, meridiem] = match;
+      hour = parseInt(hour, 10);
+      minute = parseInt(minute, 10);
+      if (meridiem.toUpperCase() === "PM" && hour !== 12) hour += 12;
+      if (meridiem.toUpperCase() === "AM" && hour === 12) hour = 0;
+      return hour * 60 + minute;
+    }
+
+    function slotDurationMinutes(timeRange) {
+      if (!timeRange || !timeRange.includes("-")) return 30;
+      const [start, end] = timeRange.split("-").map((s) => s.trim());
+      const startMin = startTimeToMinutes(`${start}-${start}`);
+      const endMin = startTimeToMinutes(`${end}-${end}`);
+      const diff = endMin - startMin;
+      return diff > 0 ? diff : 30;
+    }
+
+    function formatLikeStored(date) {
+      return date.toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      });
+    }
+
+    function monthKey(date) {
+      return `${date.getFullYear()}-${date.getMonth()}`;
+    }
+
+    //***********************************************************************************
+    // Patient dashboard overview — API Start
+    app.get("/api/patient-dashboard/overview/:patientId", async (req, res) => {
+      try {
+        const patientId = req.params.patientId;
+        const now = new Date();
+        const todayStr = formatLikeStored(now);
+
+        const allAppointments = await paymentsCollection
+          .find({ patientId })
+          .toArray();
+
+        if (allAppointments.length === 0) {
+          return res.json({
+            stats: {
+              upcomingCount: 0,
+              upcomingThisWeek: 0,
+              totalVisits: 0,
+              lastVisitDate: null,
+              totalPaid: 0,
+              outstandingAmount: 0,
+              doctorsVisited: 0,
+            },
+            upcomingAppointments: [],
+            visitHistory: [],
+          });
+        }
+
+        // ── doctor info enrichment (দুই ধাপের join, আগের pattern) ────────
+        const doctorIds = [...new Set(allAppointments.map((a) => a.doctorId))];
+        const validDoctorObjectIds = doctorIds
+          .filter((id) => ObjectId.isValid(id))
+          .map((id) => new ObjectId(id));
+        const doctorProfiles = await doctorCollection
+          .find({ _id: { $in: validDoctorObjectIds } })
+          .toArray();
+        const userIds = [
+          ...new Set(doctorProfiles.map((d) => d.userId).filter(Boolean)),
+        ];
+        const validUserObjectIds = userIds
+          .filter((id) => ObjectId.isValid(id))
+          .map((id) => new ObjectId(id));
+        const users = await usersCollection
+          .find({ _id: { $in: validUserObjectIds } })
+          .toArray();
+        const userMap = new Map(users.map((u) => [u._id.toString(), u]));
+        const doctorMap = new Map(
+          doctorProfiles.map((d) => {
+            const user = userMap.get(String(d.userId));
+            return [
+              d._id.toString(),
+              {
+                name: user?.name || "Doctor",
+                image: user?.image || null,
+                specialization: d.specialization || "",
+              },
+            ];
+          }),
+        );
+
+        // ── Stats ────────────────────────────────────────────────────────
+        const upcoming = allAppointments.filter(
+          (a) =>
+            (a.treadmendStatus === "pending" ||
+              a.treadmendStatus === "accepted") &&
+            new Date(a.appointmentDate) >=
+              new Date(new Date().setHours(0, 0, 0, 0)),
+        );
+
+        const sevenDaysFromNow = new Date();
+        sevenDaysFromNow.setDate(sevenDaysFromNow.getDate() + 7);
+        const upcomingThisWeek = upcoming.filter(
+          (a) => new Date(a.appointmentDate) <= sevenDaysFromNow,
+        ).length;
+
+        const completed = allAppointments.filter(
+          (a) => a.treadmendStatus === "completed",
+        );
+        const lastVisit = completed
+          .slice()
+          .sort(
+            (a, b) => new Date(b.appointmentDate) - new Date(a.appointmentDate),
+          )[0];
+
+        const paid = allAppointments.filter((a) => a.paymentStatus === "paid");
+        const totalPaid = paid.reduce((sum, a) => sum + Number(a.fee || 0), 0);
+
+        const outstanding = allAppointments.filter(
+          (a) => a.paymentStatus !== "paid" && a.treadmendStatus !== "rejected",
+        );
+        const outstandingAmount = outstanding.reduce(
+          (sum, a) => sum + Number(a.fee || 0),
+          0,
+        );
+
+        const doctorsVisited = new Set(completed.map((a) => a.doctorId)).size;
+
+        const stats = {
+          upcomingCount: upcoming.length,
+          upcomingThisWeek,
+          totalVisits: completed.length,
+          lastVisitDate: lastVisit?.appointmentDate || null,
+          totalPaid,
+          outstandingAmount,
+          doctorsVisited,
+        };
+
+        // ── Upcoming appointments list (doctor info + queue/wait time) ───
+        const upcomingAppointments = await Promise.all(
+          upcoming
+            .sort(
+              (a, b) =>
+                new Date(a.appointmentDate) - new Date(b.appointmentDate),
+            )
+            .slice(0, 5) // dashboard-এ শুধু পরের কয়েকটাই দরকার, বাকিটা /patient/appointments পেজে
+            .map(async (appt) => {
+              const doctor = doctorMap.get(appt.doctorId);
+              const isActiveToday = appt.appointmentDate === todayStr;
+
+              let queueAheadCount = null;
+              let estimatedWaitMinutes = null;
+
+              if (isActiveToday) {
+                const sameDayDocAppointments = await paymentsCollection
+                  .find({
+                    doctorId: appt.doctorId,
+                    appointmentDate: todayStr,
+                    treadmendStatus: { $in: ["pending", "accepted"] },
+                  })
+                  .toArray();
+                const myStart = startTimeToMinutes(appt.time);
+                const ahead = sameDayDocAppointments.filter(
+                  (a) =>
+                    a._id.toString() !== appt._id.toString() &&
+                    startTimeToMinutes(a.time) < myStart,
+                );
+                queueAheadCount = ahead.length;
+                estimatedWaitMinutes =
+                  ahead.length * slotDurationMinutes(appt.time);
+              }
+
+              return {
+                ...appt,
+                doctorName: doctor?.name || "Doctor",
+                doctorImage: doctor?.image || null,
+                specialization: doctor?.specialization || "",
+                queueAheadCount,
+                estimatedWaitMinutes,
+              };
+            }),
+        );
+
+        // ── Visit history (last 6 months, completed appointments) ────────
+        const visitHistory = [];
+        for (let i = 5; i >= 0; i--) {
+          const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+          const key = monthKey(d);
+          const count = completed.filter(
+            (a) =>
+              a.appointmentDate &&
+              monthKey(new Date(a.appointmentDate)) === key,
+          ).length;
+          visitHistory.push({
+            month: d.toLocaleDateString("en-US", { month: "short" }),
+            count,
+          });
+        }
+
+        res.json({ stats, upcomingAppointments, visitHistory });
+      } catch (error) {
+        console.error("Error fetching patient dashboard overview:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    });
+    // Patient dashboard overview API End
     //***********************************************************************************
 
     //***********************************************************************************

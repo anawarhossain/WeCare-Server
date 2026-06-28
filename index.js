@@ -77,6 +77,7 @@ async function run() {
         res.status(500).json({ error: error.message });
       }
     });
+    
 
     // ২. ফেভারিট টগল (Add/Remove) করার API
     app.post("/api/favorites/toggle", async (req, res) => {
@@ -115,6 +116,9 @@ async function run() {
         res.status(500).json({ error: error.message });
       }
     });
+
+
+    
     // Patient Favorite Doctors api End
     //***********************************************************************************
     //***********************************************************************************
@@ -2306,6 +2310,104 @@ async function run() {
       }
     });
     // Admin: payments overview API End
+    //***********************************************************************************
+
+    //***********************************************************************************
+    //***********************************************************************************
+    // Home page API Start
+    // এটা একটা পাবলিক রুট — কোনো auth middleware লাগবে না, যেকেউ কল করতে পারবে
+
+    //***********************************************************************************
+    // Public: home page overview (stats + specializations + featured doctors + testimonials)
+    app.get("/api/home/overview", async (req, res) => {
+      try {
+        const [allUsers, verifiedDoctors, allPayments, allReviews] =
+          await Promise.all([
+            usersCollection.find({}).toArray(),
+            // পাবলিক পেজে শুধু verified doctor-ই দেখানো হবে, pending/rejected বাদ
+            doctorCollection
+              .find({ verificationStatus: "Verified" })
+              .toArray(),
+            paymentsCollection.find({}).toArray(),
+            reviewsCollection.find({}).toArray(),
+          ]);
+
+        const patientCount = allUsers.filter(
+          (u) => u.role === "patient",
+        ).length;
+        const userMap = new Map(allUsers.map((u) => [u._id.toString(), u]));
+
+        // ── Specializations breakdown ───────────────────────────────────
+        const specCounts = {};
+        verifiedDoctors.forEach((d) => {
+          const spec = d.specialization || "General";
+          specCounts[spec] = (specCounts[spec] || 0) + 1;
+        });
+        const specializations = Object.entries(specCounts)
+          .map(([name, count]) => ({ name, count }))
+          .sort((a, b) => b.count - a.count);
+
+        // ── Doctor average rating (reviewsCollection থেকে) ────────────────
+        const reviewsByDoctor = new Map();
+        allReviews.forEach((r) => {
+          const entry = reviewsByDoctor.get(r.doctorId) || { sum: 0, count: 0 };
+          entry.sum += Number(r.rating || 0);
+          entry.count += 1;
+          reviewsByDoctor.set(r.doctorId, entry);
+        });
+
+        const doctorsWithRating = verifiedDoctors.map((d) => {
+          const user = userMap.get(String(d.userId));
+          const reviewStats = reviewsByDoctor.get(d._id.toString());
+          return {
+            _id: d._id,
+            name: user?.name || "Doctor",
+            image: user?.image || null,
+            specialization: d.specialization || "General",
+            experience: d.experience || 0,
+            consultationFee: d.consultationFee || "0",
+            avgRating: reviewStats ? reviewStats.sum / reviewStats.count : null,
+            totalReviews: reviewStats?.count || 0,
+          };
+        });
+
+        // রেটিং থাকা ডাক্তার আগে (rating অনুযায়ী), তারপর experience অনুযায়ী বাকিরা
+        const featuredDoctors = doctorsWithRating
+          .sort((a, b) => {
+            if (a.avgRating === null && b.avgRating === null)
+              return b.experience - a.experience;
+            if (a.avgRating === null) return 1;
+            if (b.avgRating === null) return -1;
+            return b.avgRating - a.avgRating;
+          })
+          .slice(0, 8);
+
+        // ── Testimonials — real review text-সহ top ৩টা ────────────────────
+        const testimonials = [...allReviews]
+          .filter((r) => r.reviewText && r.reviewText.trim().length > 0)
+          .sort((a, b) => {
+            if (b.rating !== a.rating) return b.rating - a.rating;
+            return new Date(b.createdAt) - new Date(a.createdAt);
+          })
+          .slice(0, 3);
+
+        res.json({
+          stats: {
+            doctors: verifiedDoctors.length,
+            patients: patientCount,
+            appointments: allPayments.length,
+            reviews: allReviews.length,
+          },
+          specializations,
+          featuredDoctors,
+          testimonials,
+        });
+      } catch (error) {
+        console.error("Error fetching home overview:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    });
+    // Public: home page overview API End
     //***********************************************************************************
 
     //***********************************************************************************

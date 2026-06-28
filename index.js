@@ -119,20 +119,25 @@ async function run() {
 
 
     // ৩ ফেভারিট লিস্ট গেট করার API
-    app.get("/api/favorites", async (req, res) => {
+    app.get("/api/favorites/:userId", async (req, res) => {
       try {
-        const { userId } = req.query;
+        // GET রিকোয়েস্টে ডেটা req.body থেকে নয়, req.params থেকে নিতে হয়
+        const { userId } = req.params;
+
         if (!userId) {
           return res.status(400).json({ error: "Missing userId" });
         }
+
         const favorites = await favoriteDoctoreCollection
           .find({ userId })
           .toArray();
+
         res.json(favorites);
       } catch (error) {
+        console.error("Error fetching favorites:", error);
         res.status(500).json({ error: error.message });
       }
-    })
+    });
     // Patient Favorite Doctors api End
     //***********************************************************************************
     //***********************************************************************************

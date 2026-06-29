@@ -670,6 +670,25 @@ async function run() {
     //***********************************************************************************
 
     //***********************************************************************************
+    // Get Prescription by appointment API Start
+    app.get("/api/prescriptions/:appointmentId", async (req, res) => {
+      try {
+        const appointmentId = req.params.appointmentId;
+
+        const prescription = await prescriptionsCollection.findOne({
+          appointmentId: appointmentId,
+        });
+
+        res.json(prescription);
+      } catch (error) {
+        console.error("Error fetching prescription:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+      
+    })
+    //***********************************************************************************
+
+    //***********************************************************************************
     // get appointments API Start
     app.get("/api/appointments", async (req, res) => {
       try {
@@ -1080,119 +1099,123 @@ async function run() {
 
     //***********************************************************************************
     // Get all appointments for a patient (with doctor info + live queue/wait time) — API Start
-    app.get("/api/appointments/patient/:patientId", verifyToken, async (req, res) => {
-      try {
-        const patientId = req.params.patientId;
+    app.get(
+      "/api/appointments/patient/:patientId",
+      verifyToken,
+      async (req, res) => {
+        try {
+          const patientId = req.params.patientId;
 
-        const appointments = await paymentsCollection
-          .find({ patientId })
-          .toArray();
+          const appointments = await paymentsCollection
+            .find({ patientId })
+            .toArray();
 
-        if (appointments.length === 0) {
-          return res.json([]);
+          if (appointments.length === 0) {
+            return res.json([]);
+          }
+
+          // ── doctor info enrichment ──────────────────────────────────────
+          // ধাপ ১: appointment.doctorId দিয়ে doctorCollection থেকে profile আনা
+          // (specialization এখানেই আছে, কিন্তু name/image নেই)
+          const doctorIds = [...new Set(appointments.map((a) => a.doctorId))];
+          const validDoctorObjectIds = doctorIds
+            .filter((id) => ObjectId.isValid(id))
+            .map((id) => new ObjectId(id));
+
+          const doctorProfiles = await doctorCollection
+            .find({ _id: { $in: validDoctorObjectIds } })
+            .toArray();
+
+          // ধাপ ২: doctorProfile.userId দিয়ে usersCollection থেকে name/image আনা
+          const userIds = [
+            ...new Set(doctorProfiles.map((d) => d.userId).filter(Boolean)),
+          ];
+          const validUserObjectIds = userIds
+            .filter((id) => ObjectId.isValid(id))
+            .map((id) => new ObjectId(id));
+
+          const users = await usersCollection
+            .find({ _id: { $in: validUserObjectIds } })
+            .toArray();
+          const userMap = new Map(users.map((u) => [u._id.toString(), u]));
+
+          // doctorId (appointment-এ যেটা সেভ আছে) → { name, image, specialization } ম্যাপ
+          const doctorMap = new Map(
+            doctorProfiles.map((d) => {
+              const user = userMap.get(String(d.userId));
+              return [
+                d._id.toString(),
+                {
+                  name: user?.name || "Doctor",
+                  image: user?.image || null,
+                  specialization: d.specialization || "",
+                },
+              ];
+            }),
+          );
+
+          const todayStr = formatLikeStored(new Date());
+
+          // ── প্রতিটা appointment-এর জন্য queue position + estimated wait ────
+          const enriched = await Promise.all(
+            appointments.map(async (appt) => {
+              const doctor = doctorMap.get(appt.doctorId);
+
+              const isActiveToday =
+                appt.appointmentDate === todayStr &&
+                (appt.treadmendStatus === "pending" ||
+                  appt.treadmendStatus === "accepted");
+
+              let queueAheadCount = null;
+              let estimatedWaitMinutes = null;
+
+              if (isActiveToday) {
+                // একই ডাক্তারের আজকের অন্য সব active appointment আনা হলো
+                const sameDayDocAppointments = await paymentsCollection
+                  .find({
+                    doctorId: appt.doctorId,
+                    appointmentDate: todayStr,
+                    treadmendStatus: { $in: ["pending", "accepted"] },
+                  })
+                  .toArray();
+
+                const myStart = startTimeToMinutes(appt.time);
+
+                // আমার আগে স্লট যাদের, এবং এখনো completed হয়নি — তারাই queue-তে "আগে"
+                const ahead = sameDayDocAppointments.filter(
+                  (a) =>
+                    a._id.toString() !== appt._id.toString() &&
+                    startTimeToMinutes(a.time) < myStart,
+                );
+
+                const avgDuration = slotDurationMinutes(appt.time);
+                queueAheadCount = ahead.length;
+                estimatedWaitMinutes = ahead.length * avgDuration;
+              }
+
+              return {
+                ...appt,
+                doctorName: doctor?.name || "Doctor",
+                doctorImage: doctor?.image || null,
+                specialization: doctor?.specialization || "",
+                queueAheadCount,
+                estimatedWaitMinutes,
+              };
+            }),
+          );
+
+          // নতুন তারিখ আগে দেখানো (appointmentDate string হওয়ায় Date-এ কনভার্ট করে sort)
+          enriched.sort(
+            (a, b) => new Date(b.appointmentDate) - new Date(a.appointmentDate),
+          );
+
+          res.json(enriched);
+        } catch (error) {
+          console.error("Error fetching patient appointments:", error);
+          res.status(500).json({ error: "Internal server error" });
         }
-
-        // ── doctor info enrichment ──────────────────────────────────────
-        // ধাপ ১: appointment.doctorId দিয়ে doctorCollection থেকে profile আনা
-        // (specialization এখানেই আছে, কিন্তু name/image নেই)
-        const doctorIds = [...new Set(appointments.map((a) => a.doctorId))];
-        const validDoctorObjectIds = doctorIds
-          .filter((id) => ObjectId.isValid(id))
-          .map((id) => new ObjectId(id));
-
-        const doctorProfiles = await doctorCollection
-          .find({ _id: { $in: validDoctorObjectIds } })
-          .toArray();
-
-        // ধাপ ২: doctorProfile.userId দিয়ে usersCollection থেকে name/image আনা
-        const userIds = [
-          ...new Set(doctorProfiles.map((d) => d.userId).filter(Boolean)),
-        ];
-        const validUserObjectIds = userIds
-          .filter((id) => ObjectId.isValid(id))
-          .map((id) => new ObjectId(id));
-
-        const users = await usersCollection
-          .find({ _id: { $in: validUserObjectIds } })
-          .toArray();
-        const userMap = new Map(users.map((u) => [u._id.toString(), u]));
-
-        // doctorId (appointment-এ যেটা সেভ আছে) → { name, image, specialization } ম্যাপ
-        const doctorMap = new Map(
-          doctorProfiles.map((d) => {
-            const user = userMap.get(String(d.userId));
-            return [
-              d._id.toString(),
-              {
-                name: user?.name || "Doctor",
-                image: user?.image || null,
-                specialization: d.specialization || "",
-              },
-            ];
-          }),
-        );
-
-        const todayStr = formatLikeStored(new Date());
-
-        // ── প্রতিটা appointment-এর জন্য queue position + estimated wait ────
-        const enriched = await Promise.all(
-          appointments.map(async (appt) => {
-            const doctor = doctorMap.get(appt.doctorId);
-
-            const isActiveToday =
-              appt.appointmentDate === todayStr &&
-              (appt.treadmendStatus === "pending" ||
-                appt.treadmendStatus === "accepted");
-
-            let queueAheadCount = null;
-            let estimatedWaitMinutes = null;
-
-            if (isActiveToday) {
-              // একই ডাক্তারের আজকের অন্য সব active appointment আনা হলো
-              const sameDayDocAppointments = await paymentsCollection
-                .find({
-                  doctorId: appt.doctorId,
-                  appointmentDate: todayStr,
-                  treadmendStatus: { $in: ["pending", "accepted"] },
-                })
-                .toArray();
-
-              const myStart = startTimeToMinutes(appt.time);
-
-              // আমার আগে স্লট যাদের, এবং এখনো completed হয়নি — তারাই queue-তে "আগে"
-              const ahead = sameDayDocAppointments.filter(
-                (a) =>
-                  a._id.toString() !== appt._id.toString() &&
-                  startTimeToMinutes(a.time) < myStart,
-              );
-
-              const avgDuration = slotDurationMinutes(appt.time);
-              queueAheadCount = ahead.length;
-              estimatedWaitMinutes = ahead.length * avgDuration;
-            }
-
-            return {
-              ...appt,
-              doctorName: doctor?.name || "Doctor",
-              doctorImage: doctor?.image || null,
-              specialization: doctor?.specialization || "",
-              queueAheadCount,
-              estimatedWaitMinutes,
-            };
-          }),
-        );
-
-        // নতুন তারিখ আগে দেখানো (appointmentDate string হওয়ায় Date-এ কনভার্ট করে sort)
-        enriched.sort(
-          (a, b) => new Date(b.appointmentDate) - new Date(a.appointmentDate),
-        );
-
-        res.json(enriched);
-      } catch (error) {
-        console.error("Error fetching patient appointments:", error);
-        res.status(500).json({ error: "Internal server error" });
-      }
-    });
+      },
+    );
     // Get all appointments for a patient API End
     //***********************************************************************************
 
@@ -1380,7 +1403,7 @@ async function run() {
 
     //***********************************************************************************
     // Update a doctor's verification status — API Start
-    app.put("/api/admin/doctors/:id/status",  async (req, res) => {
+    app.put("/api/admin/doctors/:id/status", async (req, res) => {
       try {
         const id = req.params.id;
         const { verificationStatus } = req.body;
@@ -1542,113 +1565,117 @@ async function run() {
 
     //***********************************************************************************
     // Admin: all appointments overview (with doctor info + stats) — API Start
-    app.get("/api/admin/appointments/overview", verifyToken, async (req, res) => {
-      try {
-        const appointments = await paymentsCollection.find({}).toArray();
+    app.get(
+      "/api/admin/appointments/overview",
+      verifyToken,
+      async (req, res) => {
+        try {
+          const appointments = await paymentsCollection.find({}).toArray();
 
-        if (appointments.length === 0) {
-          return res.json({
-            stats: {
+          if (appointments.length === 0) {
+            return res.json({
+              stats: {
+                total: 0,
+                upcoming: 0,
+                completed: 0,
+                cancelled: 0,
+                totalRevenue: 0,
+              },
+              appointments: [],
+            });
+          }
+
+          // ── doctor info enrichment ──────────────────────────────────────
+          const doctorIds = [...new Set(appointments.map((a) => a.doctorId))];
+          const validDoctorObjectIds = doctorIds
+            .filter((id) => ObjectId.isValid(id))
+            .map((id) => new ObjectId(id));
+
+          const doctorProfiles = await doctorCollection
+            .find({ _id: { $in: validDoctorObjectIds } })
+            .toArray();
+
+          const userIds = [
+            ...new Set(doctorProfiles.map((d) => d.userId).filter(Boolean)),
+          ];
+          const validUserObjectIds = userIds
+            .filter((id) => ObjectId.isValid(id))
+            .map((id) => new ObjectId(id));
+
+          const users = await usersCollection
+            .find({ _id: { $in: validUserObjectIds } })
+            .toArray();
+          const userMap = new Map(users.map((u) => [u._id.toString(), u]));
+
+          const doctorMap = new Map(
+            doctorProfiles.map((d) => {
+              const user = userMap.get(String(d.userId));
+              return [
+                d._id.toString(),
+                {
+                  name: user?.name || "Doctor",
+                  image: user?.image || null,
+                  specialization: d.specialization || "",
+                },
+              ];
+            }),
+          );
+
+          const enriched = appointments.map((a) => {
+            const doctor = doctorMap.get(a.doctorId);
+            return {
+              _id: a._id,
+              patientId: a.patientId,
+              patientName: a.patientName,
+              patientImage: a.patientImage,
+              doctorName: doctor?.name || "Doctor",
+              doctorImage: doctor?.image || null,
+              specialization: doctor?.specialization || "",
+              appointmentDate: a.appointmentDate,
+              time: a.time,
+              fee: Number(a.fee || 0),
+              notes: a.notes || "",
+              paymentStatus: a.paymentStatus || "pending",
+              customerCardName: a.customerCardName || "",
+              treadmendStatus: a.treadmendStatus || "pending",
+            };
+          });
+
+          // নতুন তারিখ আগে
+          enriched.sort(
+            (a, b) => new Date(b.appointmentDate) - new Date(a.appointmentDate),
+          );
+
+          // ── overview stats ───────────────────────────────────────────
+          const stats = enriched.reduce(
+            (acc, a) => {
+              acc.total += 1;
+              if (
+                a.treadmendStatus === "pending" ||
+                a.treadmendStatus === "accepted"
+              )
+                acc.upcoming += 1;
+              else if (a.treadmendStatus === "completed") acc.completed += 1;
+              else if (a.treadmendStatus === "rejected") acc.cancelled += 1;
+              if (a.paymentStatus === "paid") acc.totalRevenue += a.fee;
+              return acc;
+            },
+            {
               total: 0,
               upcoming: 0,
               completed: 0,
               cancelled: 0,
               totalRevenue: 0,
             },
-            appointments: [],
-          });
+          );
+
+          res.json({ stats, appointments: enriched });
+        } catch (error) {
+          console.error("Error fetching admin appointments overview:", error);
+          res.status(500).json({ error: "Internal server error" });
         }
-
-        // ── doctor info enrichment ──────────────────────────────────────
-        const doctorIds = [...new Set(appointments.map((a) => a.doctorId))];
-        const validDoctorObjectIds = doctorIds
-          .filter((id) => ObjectId.isValid(id))
-          .map((id) => new ObjectId(id));
-
-        const doctorProfiles = await doctorCollection
-          .find({ _id: { $in: validDoctorObjectIds } })
-          .toArray();
-
-        const userIds = [
-          ...new Set(doctorProfiles.map((d) => d.userId).filter(Boolean)),
-        ];
-        const validUserObjectIds = userIds
-          .filter((id) => ObjectId.isValid(id))
-          .map((id) => new ObjectId(id));
-
-        const users = await usersCollection
-          .find({ _id: { $in: validUserObjectIds } })
-          .toArray();
-        const userMap = new Map(users.map((u) => [u._id.toString(), u]));
-
-        const doctorMap = new Map(
-          doctorProfiles.map((d) => {
-            const user = userMap.get(String(d.userId));
-            return [
-              d._id.toString(),
-              {
-                name: user?.name || "Doctor",
-                image: user?.image || null,
-                specialization: d.specialization || "",
-              },
-            ];
-          }),
-        );
-
-        const enriched = appointments.map((a) => {
-          const doctor = doctorMap.get(a.doctorId);
-          return {
-            _id: a._id,
-            patientId: a.patientId,
-            patientName: a.patientName,
-            patientImage: a.patientImage,
-            doctorName: doctor?.name || "Doctor",
-            doctorImage: doctor?.image || null,
-            specialization: doctor?.specialization || "",
-            appointmentDate: a.appointmentDate,
-            time: a.time,
-            fee: Number(a.fee || 0),
-            notes: a.notes || "",
-            paymentStatus: a.paymentStatus || "pending",
-            customerCardName: a.customerCardName || "",
-            treadmendStatus: a.treadmendStatus || "pending",
-          };
-        });
-
-        // নতুন তারিখ আগে
-        enriched.sort(
-          (a, b) => new Date(b.appointmentDate) - new Date(a.appointmentDate),
-        );
-
-        // ── overview stats ───────────────────────────────────────────
-        const stats = enriched.reduce(
-          (acc, a) => {
-            acc.total += 1;
-            if (
-              a.treadmendStatus === "pending" ||
-              a.treadmendStatus === "accepted"
-            )
-              acc.upcoming += 1;
-            else if (a.treadmendStatus === "completed") acc.completed += 1;
-            else if (a.treadmendStatus === "rejected") acc.cancelled += 1;
-            if (a.paymentStatus === "paid") acc.totalRevenue += a.fee;
-            return acc;
-          },
-          {
-            total: 0,
-            upcoming: 0,
-            completed: 0,
-            cancelled: 0,
-            totalRevenue: 0,
-          },
-        );
-
-        res.json({ stats, appointments: enriched });
-      } catch (error) {
-        console.error("Error fetching admin appointments overview:", error);
-        res.status(500).json({ error: "Internal server error" });
-      }
-    });
+      },
+    );
     // Admin: all appointments overview API End
     //***********************************************************************************
 

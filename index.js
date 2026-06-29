@@ -1403,7 +1403,7 @@ async function run() {
 
     //***********************************************************************************
     // Update a doctor's verification status — API Start
-    app.put("/api/admin/doctors/:id/status", async (req, res) => {
+    app.put("/api/admin/doctors/:id/status", verifyToken, async (req, res) => {
       try {
         const id = req.params.id;
         const { verificationStatus } = req.body;
@@ -1445,7 +1445,7 @@ async function run() {
 
     //***********************************************************************************
     // Get all patients for admin (with appointment stats) — API Start
-    app.get("/api/admin/patients", async (req, res) => {
+    app.get("/api/admin/patients", verifyToken, async (req, res) => {
       try {
         const patients = await usersCollection
           .find({ role: "patient" })
@@ -1524,7 +1524,7 @@ async function run() {
 
     //***********************************************************************************
     // Update a patient's account status (active/suspended) — API Start
-    app.put("/api/admin/patients/:id/status", async (req, res) => {
+    app.put("/api/admin/patients/:id/status", verifyToken, async (req, res) => {
       try {
         const id = req.params.id;
         const { status } = req.body;
@@ -1705,7 +1705,7 @@ async function run() {
 
     //***********************************************************************************
     // Admin: dashboard overview (stats + charts + activity feed) — API Start
-    app.get("/api/admin/dashboard/overview", async (req, res) => {
+    app.get("/api/admin/dashboard/overview", verifyToken, async (req, res) => {
       try {
         const now = new Date();
         const thisMonthKey = monthKey(now);
@@ -2166,7 +2166,7 @@ async function run() {
 
     //***********************************************************************************
     // Admin: payments overview (stats + multi-range revenue chart + ledger) — API Start
-    app.get("/api/admin/payments/overview", async (req, res) => {
+    app.get("/api/admin/payments/overview", verifyToken, async (req, res) => {
       try {
         const allPayments = await paymentsCollection.find({}).toArray();
         const now = new Date();

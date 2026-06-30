@@ -381,7 +381,7 @@ async function run() {
 
     //***********************************************************************************
     // নির্দিষ্ট ডাক্তারের ID দিয়ে ডাটা খোঁজার API Start
-    app.get("/api/complete-doctors/:id", async (req, res) => {
+    app.get("/api/complete-doctors/:id", verifyToken, async (req, res) => {
       try {
         const doctorId = req.params.id;
 

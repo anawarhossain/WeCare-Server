@@ -750,7 +750,7 @@ async function run() {
 
     //***********************************************************************************
     // Get all prescriptions by doctorId API Start
-    app.get("/api/prescriptions/:doctorId", async (req, res) => {
+    app.get("/api/prescriptions/doctor/:doctorId", async (req, res) => {
       try {
         const doctorId = req.params.doctorId;
 
